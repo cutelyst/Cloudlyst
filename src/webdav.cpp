@@ -361,7 +361,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
     }
 
     qDebug() << Q_FUNC_INFO << "depth" << depth;
-    QStringList props;
+    GetProperties props;
     if (!parseProps(c, path, props)) {
         return;
     }
@@ -447,15 +447,15 @@ void Webdav::Auto(Context *c)
 
 }
 
-void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, QStringList &props)
+void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props)
 {
     while (!xml.atEnd()) {
         auto token = xml.readNext();
         qWarning() << "PROPS token 3" <<  xml.tokenString();
         if (token == QXmlStreamReader::StartElement) {
-            const QString name = QLatin1Char('{') + xml.namespaceUri() + QLatin1Char('}') + xml.name();
+            const QString name = /*QLatin1Char('{') + xml.namespaceUri() + QLatin1Char('}') +*/ xml.name().toString();
             qDebug() << "GET PROP" << name;
-            props.push_back(name);
+            props.push_back({ name, xml.namespaceUri().toString() });
             xml.skipCurrentElement();
         } else if (token == QXmlStreamReader::EndElement) {
             return;
@@ -463,7 +463,7 @@ void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, QStringL
     }
 }
 
-void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, QStringList &props)
+void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetProperties &props)
 {
     while (!xml.atEnd()) {
         auto token = xml.readNext();
@@ -482,7 +482,7 @@ void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, QStr
     }
 }
 
-bool Webdav::parseProps(Context *c, const QString &path, QStringList &props)
+bool Webdav::parseProps(Context *c, const QString &path, GetProperties &props)
 {
     Response *res = c->response();
 
@@ -527,11 +527,11 @@ bool Webdav::parsePropPatchValue(QXmlStreamReader &xml, const QString &path, boo
     if (xml.readNextStartElement()) {
         qWarning() << "PROPS token 4" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
         if (xml.tokenType() == QXmlStreamReader::StartElement) {
-            QString name = QLatin1Char('{') + xml.namespaceUri() + QLatin1Char('}') + xml.name();
+            const QString name = xml.name().toString();
             if (set) {
-                QString value = xml.readElementText();
-                qDebug() << "NEW PROP" << name << value << xml.tokenType();
-                m_pathProps[path].insert(name, value);
+                const QString value = xml.readElementText(QXmlStreamReader::QXmlStreamReader::SkipChildElements);
+                qDebug() << "NEW PROP" << name << value << xml.tokenString();
+                m_pathProps[path].insert(name, {xml.namespaceUri().toString(), value});
             } else {
                 qDebug() << "DELETE PROP 1" << m_pathProps[path].contains(name) << m_pathProps[path][name];
                 int ret = m_pathProps[path].remove(name);
@@ -588,16 +588,14 @@ bool Webdav::parsePropPatch(Context *c, const QString &path)
 
     QXmlStreamReader xml(data);
     while (!xml.atEnd()) {
-        if (!xml.readNextStartElement()) {
-            break;
-        }
+        QXmlStreamReader::TokenType type = xml.readNext();
 
-        qWarning() << "PROPS token 1" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
-        if (xml.tokenType() == QXmlStreamReader::StartElement && xml.name() == QLatin1String("propertyupdate")) {
+        qWarning() << "PROPS token 1" << type <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
+        if (type == QXmlStreamReader::StartElement && xml.name() == QLatin1String("propertyupdate")) {
             parsePropPatchUpdate(xml, path);
             qWarning() << "parsePropPatchUpdate finished" << xml.tokenType() << xml.tokenString() << xml.atEnd() << xml.hasError() << xml.errorString();
-            QXmlStreamReader::TokenType type = xml.readNext();
-            qWarning() << "parsePropPatchUpdate finished2" << type << xml.tokenType() << xml.tokenString() << xml.atEnd() << xml.hasError() << xml.errorString();
+//            QXmlStreamReader::TokenType type = xml.readNext();
+//            qWarning() << "parsePropPatchUpdate finished2" << type << xml.tokenType() << xml.tokenString() << xml.atEnd() << xml.hasError() << xml.errorString();
         }
     }
 
@@ -624,7 +622,7 @@ bool Webdav::parsePropPatch(Context *c, const QString &path)
     return true;
 }
 
-void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Props prop, const QStringList &props)
+void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Props prop, const GetProperties &props)
 {
     const QString path = info.absoluteFilePath().mid(m_baseDir.size());
     stream.writeStartElement(QStringLiteral("d:response"));
@@ -649,25 +647,26 @@ void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Pro
                                              QStringLiteral("ddd, dd MMM yyyy hh:mm:ss 'GMT"));
     stream.writeTextElement(QStringLiteral("d:getlastmodified"), dt);
 
-    QStringList propsNotFound;
+    GetProperties propsNotFound;
     // custom props
     auto it = m_pathProps.constFind(path);
     if (it != m_pathProps.constEnd()) {
         const Properties &properties = it.value();
-        for (const QString &pName : props) {
-            auto itP = properties.constFind(pName);
+
+        qDebug() << "FIND" << properties;
+        for (const Property &pData : props) {
+            qDebug() << "FIND data" << pData.name << pData.ns;
+            auto itP = properties.constFind(pData.name);
             if (itP != properties.constEnd()) {
-                const QString key = itP.key();
-                int pos = key.indexOf(QLatin1Char('}'), 1);
-                if (pos != -1) {
-                    const QString ns = key.mid(1, pos - 1);
-                    const QString name = key.mid(pos + 1);
-                    stream.writeTextElement(ns, name, itP.value());
-                    qDebug() << "WRITE" << key << ns << name << itP.value();
+                const std::pair<QString, QString> pair = itP.value();
+                if (pData.ns == pair.first) {
+                    stream.writeTextElement(pData.ns, pData.name, pair.second);
+                    qDebug() << "WRITE" << pData.name << pData.ns << pair.second;
+                    continue;
                 }
-            } else {
-                propsNotFound.push_back(pName);
             }
+
+            propsNotFound.push_back(pData);
         }
     } else {
         qDebug() << "PROPS NOT FOUND WRITE" << path << m_pathProps.keys();
@@ -680,24 +679,18 @@ void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Pro
 
     stream.writeEndElement(); // propstat
 
-    if (!propsNotFound.isEmpty()) {
-        for (const QString &key : propsNotFound) {
-            int pos = key.indexOf(QLatin1Char('}'), 1);
-            if (pos != -1) {
-                const QString ns = key.mid(1, pos - 1);
-                const QString name = key.mid(pos + 1);
+    if (!propsNotFound.empty()) {
+        stream.writeStartElement(QStringLiteral("d:propstat"));
+        stream.writeStartElement(QStringLiteral("d:prop"));
+        for (const Property &prop : propsNotFound) {
 
-                stream.writeStartElement(QStringLiteral("d:propstat"));
-                stream.writeStartElement(QStringLiteral("d:prop"));
+            stream.writeEmptyElement(prop.ns, prop.name);
+            qDebug() << "WRITE 404" << prop.name << prop.ns;
 
-                stream.writeEmptyElement(ns, name);
-                qDebug() << "WRITE 404" << key << ns << name;
-
-                stream.writeEndElement(); // prop
-                stream.writeEndElement(); // propstat
-                stream.writeTextElement(QStringLiteral("d:status"), QStringLiteral("HTTP/1.1 404 Not Found"));
-            }
         }
+        stream.writeEndElement(); // prop
+        stream.writeEndElement(); // propstat
+        stream.writeTextElement(QStringLiteral("d:status"), QStringLiteral("HTTP/1.1 404 Not Found"));
     }
 
     stream.writeEndElement(); // response

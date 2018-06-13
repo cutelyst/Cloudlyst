@@ -7,7 +7,14 @@
 
 using namespace Cutelyst;
 
-typedef QHash<QString, QString> Properties;
+typedef QHash<QString, std::pair<QString, QString> > Properties;
+
+struct Property
+{
+    QString name;
+    QString ns;
+};
+typedef std::vector<Property> GetProperties;
 
 class QFileInfo;
 class QXmlStreamReader;
@@ -67,15 +74,15 @@ private:
     C_ATTR(End, :Private)
     void End(Context *c) { Q_UNUSED(c); }
 
-    void parsePropsProp(QXmlStreamReader &xml, const QString &path, QStringList &props);
-    void parsePropsPropFind(QXmlStreamReader &xml, const QString &path, QStringList &props);
-    bool parseProps(Context *c, const QString &path, QStringList &props);
+    void parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props);
+    void parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetProperties &props);
+    bool parseProps(Context *c, const QString &path, GetProperties &props);
 
     bool parsePropPatchValue(QXmlStreamReader &xml, const QString &path, bool set);
     bool parsePropPatchProperty(QXmlStreamReader &xml, const QString &path, bool set);
     void parsePropPatchUpdate(QXmlStreamReader &xml, const QString &path);
     bool parsePropPatch(Context *c, const QString &path);
-    void profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Props prop, const QStringList &props);
+    void profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Props prop, const GetProperties &props);
     bool removeDestination(const QFileInfo &info, Response *res);
 
     QMimeDatabase m_db;
