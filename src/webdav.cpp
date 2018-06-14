@@ -1,5 +1,7 @@
 #include "webdav.h"
 
+#include "webdavpropertystorage.h"
+
 #include <QFileInfo>
 #include <QDir>
 #include <QDirIterator>
@@ -22,6 +24,8 @@ Webdav::Webdav(QObject *parent) : Controller(parent)
     }
     QDir().mkpath(m_baseDir);
     qDebug() << "BASE" << m_baseDir;
+
+    m_propStorage = new WebdavPropertyStorage(this);
 }
 
 Webdav::~Webdav()
@@ -31,6 +35,7 @@ Webdav::~Webdav()
 void Webdav::dav(Context *c, const QStringList &pathParts)
 {
     c->response()->setHeader(QStringLiteral("DAV"), QStringLiteral("1, 2"));
+    qDebug() << "=====================" << c->req()->header("x-litmus");
 }
 
 void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
@@ -194,7 +199,8 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     const QString path = pathParts.join(QLatin1Char('/'));
     const QString resource = m_baseDir + path;
     const QUrl destination(c->request()->header(QStringLiteral("DESTINATION")));
-    QString destResource = m_baseDir + destination.path().mid(8);
+    const QString destPath = destination.path().mid(8);
+    QString destResource = m_baseDir + destPath;
     while (destResource.endsWith(QLatin1Char('/'))) {
         destResource.chop(1);
     }
@@ -225,6 +231,8 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
         QFile file(resource);
         if (file.rename(destResource)) {
             res->setStatus(overwrite ? Response::NoContent : Response::Created);
+            m_propStorage->moveValues(path, destPath);
+            m_propStorage->commit();
         } else {
             qDebug() << "MOVE failed" << file.errorString();
             res->setStatus(Response::InternalServerError);
@@ -235,6 +243,8 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
         QDir dir;
         if (dir.rename(resource, destResource)) {
             res->setStatus(overwrite ? Response::NoContent : Response::Created);
+            m_propStorage->moveValues(path, destPath);
+            m_propStorage->commit();
         } else {
             qDebug() << "MOVE dir failed";
             res->setStatus(Response::InternalServerError);
@@ -453,9 +463,10 @@ void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, GetPrope
         auto token = xml.readNext();
         qWarning() << "PROPS token 3" <<  xml.tokenString();
         if (token == QXmlStreamReader::StartElement) {
-            const QString name = /*QLatin1Char('{') + xml.namespaceUri() + QLatin1Char('}') +*/ xml.name().toString();
-            qDebug() << "GET PROP" << name;
-            props.push_back({ name, xml.namespaceUri().toString() });
+            const QString name = xml.name().toString();
+            const QString ns = xml.namespaceUri().toString();
+            qDebug() << "GET PROP" << WebdavPropertyStorage::propertyKey(name, ns);
+            props.push_back({ name, ns });
             xml.skipCurrentElement();
         } else if (token == QXmlStreamReader::EndElement) {
             return;
@@ -488,7 +499,7 @@ bool Webdav::parseProps(Context *c, const QString &path, GetProperties &props)
 
     const QByteArray data = c->request()->body()->readAll();
     qWarning() << "PROPS data" << data;
-    qDebug() << "PROPS current" << m_pathProps[path];
+//    qDebug() << "PROPS current" << m_pathProps[path];
 
     QXmlStreamReader xml(data);
     while (!xml.atEnd()) {
@@ -524,32 +535,37 @@ bool Webdav::parseProps(Context *c, const QString &path, GetProperties &props)
 
 bool Webdav::parsePropPatchValue(QXmlStreamReader &xml, const QString &path, bool set)
 {
-    if (xml.readNextStartElement()) {
-        qWarning() << "PROPS token 4" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
-        if (xml.tokenType() == QXmlStreamReader::StartElement) {
+    int depth = 0;
+    while (!xml.atEnd()) {
+        QXmlStreamReader::TokenType type = xml.readNext();
+        qWarning() << "PROPS token 4" << type <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
+        if (type == QXmlStreamReader::StartElement) {
             const QString name = xml.name().toString();
             if (set) {
                 const QString value = xml.readElementText(QXmlStreamReader::QXmlStreamReader::SkipChildElements);
                 qDebug() << "NEW PROP" << name << value << xml.tokenString();
-                m_pathProps[path].insert(name, {xml.namespaceUri().toString(), value});
+                m_propStorage->setValue(path, WebdavPropertyStorage::propertyKey(xml.name(), xml.namespaceUri()), value);
             } else {
-                qDebug() << "DELETE PROP 1" << m_pathProps[path].contains(name) << m_pathProps[path][name];
-                int ret = m_pathProps[path].remove(name);
-                qDebug() << "DELETE PROP 2" << ret << name << xml.tokenType();
-                qDebug() << "DELETE PROP 3" << m_pathProps[path].contains(name);
+                qDebug() << "DELETE PROP ";
+                m_propStorage->remove(path, WebdavPropertyStorage::propertyKey(xml.name(), xml.namespaceUri()));
+                xml.skipCurrentElement();
             }
-            xml.skipCurrentElement();
+            ++depth;
+        } else if (type == QXmlStreamReader::EndElement) {
+            if (--depth == 0) {
+                return true;
+            }
         }
-        return true;
     }
     return false;
 }
 
 bool Webdav::parsePropPatchProperty(QXmlStreamReader &xml, const QString &path, bool set)
 {
-    while (xml.readNextStartElement()) {
+    while (!xml.atEnd()) {
+        QXmlStreamReader::TokenType type = xml.readNext();
         qWarning() << "PROPS token 3" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
-        if (xml.tokenType() == QXmlStreamReader::StartElement) {
+        if (type == QXmlStreamReader::StartElement) {
             if (xml.name() == QLatin1String("prop")) {
                 qWarning() << "PROPS prop" ;
                 if (!parsePropPatchValue(xml, path, set)) {
@@ -557,6 +573,8 @@ bool Webdav::parsePropPatchProperty(QXmlStreamReader &xml, const QString &path, 
                 }
                 continue;
             }
+        } else {
+            return true;
         }
         return true;
     }
@@ -565,9 +583,10 @@ bool Webdav::parsePropPatchProperty(QXmlStreamReader &xml, const QString &path, 
 
 void Webdav::parsePropPatchUpdate(QXmlStreamReader &xml, const QString &path)
 {
-    while (xml.readNextStartElement()) {
+    while (!xml.atEnd()) {
+        QXmlStreamReader::TokenType type = xml.readNext();
         qWarning() << "PROPS token 2" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
-        if (xml.tokenType() == QXmlStreamReader::StartElement) {
+        if (type == QXmlStreamReader::StartElement) {
             if (xml.name() == QLatin1String("set")) {
                 qWarning() << "PROPS set" ;
                 parsePropPatchProperty(xml, path, true);
@@ -575,6 +594,8 @@ void Webdav::parsePropPatchUpdate(QXmlStreamReader &xml, const QString &path)
                 qWarning() << "PROPS remove";
                 parsePropPatchProperty(xml, path, false);
             }
+        } else if (type == QXmlStreamReader::EndElement) {
+            return;
         }
     }
 }
@@ -649,29 +670,27 @@ void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Pro
 
     GetProperties propsNotFound;
     // custom props
-    auto it = m_pathProps.constFind(path);
-    if (it != m_pathProps.constEnd()) {
-        const Properties &properties = it.value();
+//    auto it = m_pathProps.constFind(path);
+//    if (it != m_pathProps.constEnd()) {
+//        const Properties &properties = it.value();
 
-        qDebug() << "FIND" << properties;
+//        qDebug() << "FIND" << properties;
         for (const Property &pData : props) {
             qDebug() << "FIND data" << pData.name << pData.ns;
-            auto itP = properties.constFind(pData.name);
-            if (itP != properties.constEnd()) {
-                const std::pair<QString, QString> pair = itP.value();
-                if (pData.ns == pair.first) {
-                    stream.writeTextElement(pData.ns, pData.name, pair.second);
-                    qDebug() << "WRITE" << pData.name << pData.ns << pair.second;
-                    continue;
-                }
+            bool found;
+            const QString value = m_propStorage->value(path, WebdavPropertyStorage::propertyKey(pData.name, pData.ns), found);
+            if (found) {
+                stream.writeTextElement(pData.ns, pData.name, value);
+                qDebug() << "WRITE" << pData.name << pData.ns << value;
+                continue;
             }
 
             propsNotFound.push_back(pData);
         }
-    } else {
-        qDebug() << "PROPS NOT FOUND WRITE" << path << m_pathProps.keys();
-        propsNotFound = props;
-    }
+//    } else {
+//        qDebug() << "PROPS NOT FOUND WRITE" << path << m_pathProps.keys();
+//        propsNotFound = props;
+//    }
 
     stream.writeEndElement(); // prop
 
@@ -689,11 +708,13 @@ void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Pro
 
         }
         stream.writeEndElement(); // prop
-        stream.writeEndElement(); // propstat
         stream.writeTextElement(QStringLiteral("d:status"), QStringLiteral("HTTP/1.1 404 Not Found"));
+        stream.writeEndElement(); // propstat
     }
 
     stream.writeEndElement(); // response
+
+    m_propStorage->commit();
 }
 
 bool Webdav::removeDestination(const QFileInfo &info, Response *res)

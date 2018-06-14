@@ -19,6 +19,7 @@ typedef std::vector<Property> GetProperties;
 class QFileInfo;
 class QXmlStreamReader;
 class QXmlStreamWriter;
+class WebdavPropertyStorage;
 class Webdav : public Controller
 {
     Q_OBJECT
@@ -87,7 +88,7 @@ private:
 
     QMimeDatabase m_db;
     QString m_baseDir;
-    QHash<QString, Properties> m_pathProps;
+    WebdavPropertyStorage *m_propStorage;
 };
 
 #endif //WEBDAV_H
