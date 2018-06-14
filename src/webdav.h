@@ -59,9 +59,6 @@ public:
     C_ATTR(dav_PUT, :Private)
     void dav_PUT(Context *c, const QStringList &pathParts);
 
-    C_ATTR(dav_LOCK, :Private)
-    void dav_LOCK(Context *c, const QStringList &pathParts);
-
     C_ATTR(dav_PROPFIND, :Private)
     void dav_PROPFIND(Context *c, const QStringList &pathParts);
 

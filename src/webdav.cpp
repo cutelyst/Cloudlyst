@@ -34,7 +34,7 @@ Webdav::~Webdav()
 
 void Webdav::dav(Context *c, const QStringList &pathParts)
 {
-    c->response()->setHeader(QStringLiteral("DAV"), QStringLiteral("1, 2"));
+    c->response()->setHeader(QStringLiteral("DAV"), QStringLiteral("1"));
     qDebug() << "=====================" << c->req()->header("x-litmus");
 }
 
@@ -308,47 +308,6 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
 
     file.write(req->body()->readAll());
     c->response()->setStatus(Response::Created);
-}
-
-void Webdav::dav_LOCK(Context *c, const QStringList &pathParts)
-{
-    Request *req = c->request();
-    const QString path = pathParts.join(QLatin1Char('/'));
-    qDebug() << Q_FUNC_INFO << path << req->body() << req->headers();
-
-    if (!req->body()) {
-        c->response()->setStatus(Response::BadRequest);
-        return;
-    }
-
-    int depth = 0;
-    const QString depthStr = req->header(QStringLiteral("DEPTH"));
-    if (depthStr == QLatin1String("1")) {
-        depth = 1;
-    } else if (depthStr == QLatin1String("infinity")) {
-        depth = -1;
-    }
-
-    const QByteArray data = req->body()->readAll();
-
-    qDebug() << Q_FUNC_INFO << "depth" << depth << data;
-
-    Response *res = c->response();
-    res->setStatus(Response::NotImplemented);
-    res->setContentType(QStringLiteral("application/xml; charset=utf-8"));
-
-    QXmlStreamWriter stream(res);
-    stream.setAutoFormatting(true);
-    stream.writeStartDocument();
-    stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
-    stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
-
-    stream.writeStartElement(QStringLiteral("d:error"));
-    stream.writeTextElement(QStringLiteral("s:exception"), QStringLiteral("Sabre\\DAV\\Exception\\NotFound"));
-    stream.writeTextElement(QStringLiteral("s:message"), QLatin1String("File with name ") + path + QLatin1String(" could not be located"));
-    stream.writeEndElement(); // error
-
-    stream.writeEndDocument();
 }
 
 void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
