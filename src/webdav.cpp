@@ -308,18 +308,25 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
 
     Request *req = c->request();
     if (!req->body()) {
+        qDebug() << "PUT Missing body";
         c->response()->setStatus(Response::BadRequest);
         return;
     }
 
     QFile file(resource);
-    if (!file.open(QFile::WriteOnly)) {
+    bool exists = file.exists();
+    if (!file.open(QFile::WriteOnly | QFile::Truncate)) {
+        qDebug() << "PUT Could not open file for writting" << file.errorString();
         c->response()->setStatus(Response::BadRequest);
         return;
     }
 
+    QFileInfo info(resource);
+    const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
+    c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
+
     file.write(req->body()->readAll());
-    c->response()->setStatus(Response::Created);
+    c->response()->setStatus(exists ? Response::OK : Response::Created);
 }
 
 void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)

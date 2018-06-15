@@ -37,8 +37,8 @@ public:
     void capabilitiesPhp(Context *c);
 
 private:
-    C_ATTR(End, :ActionClass("RenderView"))
-    void End(Context *c) { Q_UNUSED(c); }
+//    C_ATTR(End, :ActionClass("RenderView"))
+//    void End(Context *c) { Q_UNUSED(c); }
 };
 
 #endif //ROOT_H
