@@ -10,6 +10,7 @@
 #include <QXmlStreamWriter>
 
 #include <QMimeDatabase>
+#include <QCryptographicHash>
 #include <QStandardPaths>
 
 #include <QLoggingCategory>
@@ -48,9 +49,14 @@ void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
     QFileInfo info(resource);
     if (info.exists()) {
         const QMimeType mime = m_db.mimeTypeForFile(resource);
-        res->setContentType(mime.name());
-        res->headers().setContentDispositionAttachment(info.fileName());
-        res->setContentLength(info.size());
+
+        Headers &headers = res->headers();
+        headers.setContentType(mime.name());
+        headers.setContentDispositionAttachment(info.fileName());
+        headers.setContentLength(info.size());
+
+        const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
+        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
     } else {
         res->setStatus(Response::NotFound);
         res->setBody(QByteArrayLiteral("Content not found."));
@@ -67,9 +73,15 @@ void Webdav::dav_GET(Context *c, const QStringList &pathParts)
     auto file = new QFile(resource, c);
     if (file->open(QIODevice::ReadOnly)) {
         res->setBody(file);
-        const QMimeType mime = m_db.mimeTypeForFile(file->fileName());
-        res->setContentType(mime.name());
-        res->headers().setContentDispositionAttachment(file->fileName());
+        const QMimeType mime = m_db.mimeTypeForFile(resource);
+
+        Headers &headers = res->headers();
+        headers.setContentType(mime.name());
+        headers.setContentDispositionAttachment(file->fileName());
+
+        const QFileInfo info(resource);
+        const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
+        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
     } else {
         QFileInfo info(resource);
         if (info.isDir()) {
@@ -316,11 +328,6 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
     const QString path = pathParts.join(QLatin1Char('/'));
     qDebug() << Q_FUNC_INFO << path << req->body() << req->headers();
 
-    if (!req->body()) {
-        c->response()->setStatus(Response::BadRequest);
-        return;
-    }
-
     int depth = 0;
     const QString depthStr = req->header(QStringLiteral("DEPTH"));
     if (depthStr == QLatin1String("1")) {
@@ -329,18 +336,19 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
         depth = -1;
     }
 
-    qDebug() << Q_FUNC_INFO << "depth" << depth;
+    qDebug() << Q_FUNC_INFO << "depth" << depth << req->header(QStringLiteral("DEPTH"));
     GetProperties props;
-    if (!parseProps(c, path, props)) {
+    if (req->body() && req->body()->size() && !parseProps(c, path, props)) {
         return;
     }
-//    const QByteArray data = req->body()->readAll();
 
     Response *res = c->response();
     res->setStatus(207);
     res->setContentType(QStringLiteral("application/xml; charset=utf-8"));
 
     QXmlStreamWriter stream(res);
+
+    const QString baseUri = QLatin1Char('/') + req->match() + QLatin1Char('/');
 
     const QString resource = m_baseDir + path;
     if (depth != -1) {
@@ -353,16 +361,17 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
             stream.writeStartElement(QStringLiteral("d:multistatus"));
 
-            profindRequest(info, stream, Props(Resourcetype | Getcontenttype), props);
+            profindRequest(info, stream, baseUri, props);
 
-            qDebug() << Q_FUNC_INFO << "DIR" << info.isDir();
+            qDebug() << Q_FUNC_INFO << "DIR" << info.isDir() << "DEPTH" << depth;
+            qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
             if (depth == 1 && info.isDir()) {
                 const QDir dir(resource);
                 qDebug() << Q_FUNC_INFO << "DIR" << dir;
 
                 for (const QFileInfo &info : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
                     qDebug() << Q_FUNC_INFO << "DIR" << info.fileName();
-                    profindRequest(info, stream, Props(Resourcetype | Getcontenttype), props);
+                    profindRequest(info, stream, baseUri, props);
                 }
             }
 
@@ -602,54 +611,87 @@ bool Webdav::parsePropPatch(Context *c, const QString &path)
     return true;
 }
 
-void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Props prop, const GetProperties &props)
+void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props)
 {
     const QString path = info.absoluteFilePath().mid(m_baseDir.size());
     stream.writeStartElement(QStringLiteral("d:response"));
-    stream.writeTextElement(QStringLiteral("d:href"), QLatin1String("/webdav/") + info.fileName());
+    stream.writeTextElement(QStringLiteral("d:href"), baseUri + path);
 
     stream.writeStartElement(QStringLiteral("d:propstat"));
 
     stream.writeStartElement(QStringLiteral("d:prop"));
 
-    stream.writeTextElement(QStringLiteral("d:getcontentlength"), QString::number(info.size()));
-
-    if ((prop & Resourcetype) && info.isDir()) {
-        stream.writeStartElement(QStringLiteral("d:resourcetype"));
-        stream.writeEmptyElement(QStringLiteral("d:collection"));
-        stream.writeEndElement(); // resourcetype
-    }
-
-    const QMimeType mime = m_db.mimeTypeForFile(info);
-    stream.writeTextElement(QStringLiteral("d:getcontenttype"), mime.name());
-
-    const QString dt = QLocale::c().toString(info.lastModified().toUTC(),
-                                             QStringLiteral("ddd, dd MMM yyyy hh:mm:ss 'GMT"));
-    stream.writeTextElement(QStringLiteral("d:getlastmodified"), dt);
-
     GetProperties propsNotFound;
-    // custom props
-//    auto it = m_pathProps.constFind(path);
-//    if (it != m_pathProps.constEnd()) {
-//        const Properties &properties = it.value();
 
 //        qDebug() << "FIND" << properties;
-        for (const Property &pData : props) {
-            qDebug() << "FIND data" << pData.name << pData.ns;
-            bool found;
-            const QString value = m_propStorage->value(path, WebdavPropertyStorage::propertyKey(pData.name, pData.ns), found);
-            if (found) {
-                stream.writeTextElement(pData.ns, pData.name, value);
-                qDebug() << "WRITE" << pData.name << pData.ns << value;
+    for (const Property &pData : props) {
+        qDebug() << "FIND data" << pData.name << pData.ns;
+        bool found = false;
+        if (pData.ns == QLatin1String("DAV:")) {
+            if (pData.name == QLatin1String("quota-used-bytes")) {
+                stream.writeEmptyElement(QStringLiteral("d:quota-used-bytes"));
+                continue;
+            } else if (pData.name == QLatin1String("quota-available-bytes")) {
+                stream.writeEmptyElement(QStringLiteral("d:quota-available-bytes"));
+                continue;
+            } else if (pData.name == QLatin1String("getcontenttype")) {
+                const QMimeType mime = m_db.mimeTypeForFile(info);
+                stream.writeTextElement(QStringLiteral("d:getcontenttype"), mime.name());
+                continue;
+            } else if (pData.name == QLatin1String("getlastmodified")) {
+                const QString dt = QLocale::c().toString(info.lastModified().toUTC(),
+                                                         QStringLiteral("ddd, dd MMM yyyy hh:mm:ss 'GMT"));
+                stream.writeTextElement(QStringLiteral("d:getlastmodified"), dt);
+                continue;
+            } else if (pData.name == QLatin1String("getcontentlength")) {
+                stream.writeTextElement(QStringLiteral("d:getcontentlength"), QString::number(info.size()));
+                continue;
+            } else if (pData.name == QLatin1String("getetag")) {
+                const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
+                stream.writeTextElement(QStringLiteral("d:getetag"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
+                continue;
+            } else if (pData.name == QLatin1String("resourcetype")) {
+                stream.writeStartElement(QStringLiteral("d:resourcetype"));
+                if (info.isDir()) {
+                    stream.writeEmptyElement(QStringLiteral("d:collection"));
+                }
+                stream.writeEndElement(); // resourcetype
                 continue;
             }
-
-            propsNotFound.push_back(pData);
+        } else if (pData.ns == QLatin1String("http://owncloud.org/ns")) {
+            if (pData.name == QLatin1String("id")) {
+                stream.writeTextElement(pData.ns, QStringLiteral("id"), QStringLiteral("00123"));
+                continue;
+            } else if (pData.name == QLatin1String("downloadURL")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("downloadURL"));
+                continue;
+            } else if (pData.name == QLatin1String("permissions")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("permissions"));
+                continue;
+            } else if (pData.name == QLatin1String("data-fingerprint")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("data-fingerprint"));
+                continue;
+            } else if (pData.name == QLatin1String("share-types")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("share-types"));
+                continue;
+            } else if (pData.name == QLatin1String("dDC")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("dDC"));
+                continue;
+            } else if (pData.name == QLatin1String("checksums")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("checksums"));
+                continue;
+            }
         }
-//    } else {
-//        qDebug() << "PROPS NOT FOUND WRITE" << path << m_pathProps.keys();
-//        propsNotFound = props;
-//    }
+
+        const QString value = m_propStorage->value(path, WebdavPropertyStorage::propertyKey(pData.name, pData.ns), found);
+        if (found) {
+            stream.writeTextElement(pData.ns, pData.name, value);
+            qDebug() << "WRITE" << pData.name << pData.ns << value;
+            continue;
+        }
+
+        propsNotFound.push_back(pData);
+    }
 
     stream.writeEndElement(); // prop
 

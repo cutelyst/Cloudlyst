@@ -80,7 +80,7 @@ private:
     bool parsePropPatchProperty(QXmlStreamReader &xml, const QString &path, bool set);
     void parsePropPatchUpdate(QXmlStreamReader &xml, const QString &path);
     bool parsePropPatch(Context *c, const QString &path);
-    void profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, Props prop, const GetProperties &props);
+    void profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
     bool removeDestination(const QFileInfo &info, Response *res);
 
     QMimeDatabase m_db;
