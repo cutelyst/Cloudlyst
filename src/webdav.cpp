@@ -350,7 +350,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
     }
 
     Response *res = c->response();
-    res->setStatus(207);
+    res->setStatus(Response::MultiStatus);
     res->setContentType(QStringLiteral("application/xml; charset=utf-8"));
 
     QXmlStreamWriter stream(res);
