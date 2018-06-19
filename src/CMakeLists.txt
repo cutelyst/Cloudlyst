@@ -11,7 +11,10 @@ add_library(Cloudlyst SHARED ${Cloudlyst_SRCS})
 # Link to Cutelyst
 target_link_libraries(Cloudlyst
     Cutelyst::Core
+    Cutelyst::Authentication
+    Cutelyst::Utils::Sql
     Qt5::Core
     Qt5::Network
+    Qt5::Sql
 )
 

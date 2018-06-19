@@ -16,6 +16,7 @@ struct Property
 };
 typedef std::vector<Property> GetProperties;
 
+class QSqlQuery;
 class QFileInfo;
 class QXmlStreamReader;
 class QXmlStreamWriter;
@@ -36,7 +37,7 @@ public:
     Q_FLAG(Props)
 
     C_ATTR(dav, :Path :AutoArgs :ActionClass(REST))
-    void dav(Context *c, const QStringList &pathParts);
+    bool dav(Context *c, const QStringList &pathParts);
 
     C_ATTR(dav_HEAD, :Private)
     void dav_HEAD(Context *c, const QStringList &pathParts);
@@ -63,14 +64,11 @@ public:
     void dav_PROPFIND(Context *c, const QStringList &pathParts);
 
     C_ATTR(dav_PROPPATCH, :Private)
-    void dav_PROPPATCH(Context *c, const QStringList &pathPart);
+    void dav_PROPPATCH(Context *c, const QStringList &pathParts);
 
 private:
-    C_ATTR(Auto, :Private)
-    void Auto(Context *c);
-
-    C_ATTR(End, :Private)
-    void End(Context *c) { Q_UNUSED(c); }
+//    C_ATTR(End, :Private)
+//    void End(Context *c) { Q_UNUSED(c); }
 
     void parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props);
     void parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetProperties &props);
@@ -81,7 +79,15 @@ private:
     void parsePropPatchUpdate(QXmlStreamReader &xml, const QString &path);
     bool parsePropPatch(Context *c, const QString &path);
     void profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
+    void profindRequest(const QSqlQuery &query, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
     bool removeDestination(const QFileInfo &info, Response *res);
+
+    bool sqlFilesUpsert(const QString &path, const QString &parentPath, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error);
+    bool sqlFilesDelete(const QString &path, const QVariant &userId, QString &error);
+
+    inline QString pathFiles(const QStringList &pathParts) const;
+    inline QString basePath(Context *c) const;
+    inline QString resourcePath(Context *c, const QStringList &pathParts) const;
 
     QMimeDatabase m_db;
     QString m_baseDir;

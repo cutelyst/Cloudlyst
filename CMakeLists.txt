@@ -12,7 +12,7 @@ if(WIN32)
   endif()
 endif()
 
-find_package(Qt5 COMPONENTS Core Network REQUIRED)
+find_package(Qt5 COMPONENTS Core Network Sql REQUIRED)
 find_package(Cutelyst2Qt5 2.5.0 REQUIRED)
 
 # Auto generate moc files

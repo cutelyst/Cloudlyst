@@ -13,7 +13,10 @@ public:
     Q_INVOKABLE explicit Cloudlyst(QObject *parent = 0);
     ~Cloudlyst();
 
-    bool init();
+    bool init() override;
+    bool postFork() override;
+
+    bool createDB();
 };
 
 #endif //CLOUDLYST_H

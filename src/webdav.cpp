@@ -2,6 +2,12 @@
 
 #include "webdavpropertystorage.h"
 
+#include <Cutelyst/Plugins/Authentication/authentication.h>
+#include <Cutelyst/Plugins/Utils/Sql>
+
+#include <QSqlQuery>
+#include <QSqlError>
+
 #include <QFileInfo>
 #include <QDir>
 #include <QDirIterator>
@@ -14,6 +20,8 @@
 #include <QStandardPaths>
 
 #include <QLoggingCategory>
+
+Q_LOGGING_CATEGORY(WEBDAV_PUT, "webdav.PUT")
 
 using namespace Cutelyst;
 
@@ -33,10 +41,17 @@ Webdav::~Webdav()
 {
 }
 
-void Webdav::dav(Context *c, const QStringList &pathParts)
+bool Webdav::dav(Context *c, const QStringList &pathParts)
 {
-    c->response()->setHeader(QStringLiteral("DAV"), QStringLiteral("1"));
-    qDebug() << "=====================" << c->req()->header("x-litmus");
+    Q_UNUSED(pathParts)
+
+    if (Authentication::userExists(c) || Authentication::authenticate(c, QStringLiteral("Cloudlyst"))) {
+        c->response()->setHeader(QStringLiteral("DAV"), QStringLiteral("1"));
+
+        return true;
+    }
+
+    return false;
 }
 
 void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
@@ -44,7 +59,7 @@ void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
     qDebug() << Q_FUNC_INFO << pathParts;
     Response *res = c->response();
 
-    const QString resource = m_baseDir + pathParts.join(QLatin1Char('/'));
+    const QString resource = resourcePath(c, pathParts);
 
     QFileInfo info(resource);
     if (info.exists()) {
@@ -68,7 +83,7 @@ void Webdav::dav_GET(Context *c, const QStringList &pathParts)
     qDebug() << Q_FUNC_INFO << pathParts;
     Response *res = c->response();
 
-    const QString resource = m_baseDir + pathParts.join(QLatin1Char('/'));
+    const QString resource = resourcePath(c, pathParts);
 
     auto file = new QFile(resource, c);
     if (file->open(QIODevice::ReadOnly)) {
@@ -96,8 +111,8 @@ void Webdav::dav_GET(Context *c, const QStringList &pathParts)
 
 void Webdav::dav_DELETE(Context *c, const QStringList &pathParts)
 {
-    const QString path = pathParts.join(QLatin1Char('/'));
-    const QString resource = m_baseDir + path;
+    const QString path = pathFiles(pathParts);
+    const QString resource = resourcePath(c, pathParts);
     qDebug() << Q_FUNC_INFO << path << resource;
 
     Response *res = c->response();
@@ -105,6 +120,10 @@ void Webdav::dav_DELETE(Context *c, const QStringList &pathParts)
     if (info.exists()) {
         if (removeDestination(info, res)) {
             res->setStatus(Response::NoContent);
+            QString error;
+            if (!sqlFilesDelete(path, Authentication::user(c).id(), error)) {
+                qDebug() << "DELETE sql error" << error;
+            }
         }
     } else {
         res->setStatus(Response::NotFound);
@@ -115,7 +134,7 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
 {
     Request *req = c->request();
     const QUrl destination(req->header(QStringLiteral("DESTINATION")));
-    const QString path = pathParts.join(QLatin1Char('/'));
+    const QString path = pathFiles(pathParts);
     QString destPath = destination.path().mid(8);
     while (destPath.endsWith(QLatin1Char('/'))) {
         destPath.chop(1);
@@ -208,8 +227,8 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
 
 void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
 {
-    const QString path = pathParts.join(QLatin1Char('/'));
-    const QString resource = m_baseDir + path;
+    const QString path = pathFiles(pathParts);
+    const QString resource = resourcePath(c, pathParts);
     const QUrl destination(c->request()->header(QStringLiteral("DESTINATION")));
     const QString destPath = destination.path().mid(8);
     QString destResource = m_baseDir + destPath;
@@ -274,41 +293,57 @@ void Webdav::dav_MKCOL(Context *c, const QStringList &pathParts)
         return;
     }
 
-    const QString path = pathParts.join(QLatin1Char('/'));
-    const QString resource = m_baseDir + path;
+    const QString path = pathFiles(pathParts);
+    const QString resource = resourcePath(c, pathParts);
     QDir dir(resource);
     if (dir.exists()) {
         res->setStatus(Response::MethodNotAllowed);
-    } else if (dir.mkdir(resource)) {
-        res->setStatus(Response::Created);
     } else {
-        qDebug() << Q_FUNC_INFO << "failed to create" << path;
-        res->setStatus(Response::Conflict);
+        if (dir.mkdir(resource)) {
+            QFileInfo dirInfo(resource);
+            const QByteArray hash = QCryptographicHash::hash(dirInfo.lastModified().toUTC().toString(Qt::ISODate).toLatin1(), QCryptographicHash::Md5);
+            const QString etag = QString::fromLatin1(hash.toHex());
+            c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + etag + QLatin1Char('"'));
 
-        QXmlStreamWriter stream(res);
-        stream.setAutoFormatting(true);
-        stream.writeStartDocument();
-        stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
-        stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
+            QString error;
+            if (sqlFilesUpsert(path,  pathParts.mid(0, pathParts.size() - 1).join(QLatin1Char('/')), dirInfo, etag, Authentication::user(c).id(), error)) {
+                c->response()->setStatus(Response::Created);
+            } else {
+                c->response()->setStatus(Response::InternalServerError);
+                c->response()->setBody(error);
+                dir.rmdir(resource);
+                qDebug() << "MKCOL error" << error;
+            }
+        } else {
+            qDebug() << Q_FUNC_INFO << "failed to create" << path;
+            res->setStatus(Response::Conflict);
 
-        stream.writeStartElement(QStringLiteral("d:error"));
-        stream.writeTextElement(QStringLiteral("s:exception"), QStringLiteral("Sabre\\DAV\\Exception\\NotFound"));
-        stream.writeTextElement(QStringLiteral("s:message"), QLatin1String("File with name /") + path + QLatin1String(" could not be located"));
-        stream.writeEndElement(); // error
+            QXmlStreamWriter stream(res);
+            stream.setAutoFormatting(true);
+            stream.writeStartDocument();
+            stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
+            stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
 
-        stream.writeEndDocument();
+            stream.writeStartElement(QStringLiteral("d:error"));
+            stream.writeTextElement(QStringLiteral("s:exception"), QStringLiteral("Sabre\\DAV\\Exception\\NotFound"));
+            stream.writeTextElement(QStringLiteral("s:message"), QLatin1String("File with name /") + path + QLatin1String(" could not be located"));
+            stream.writeEndElement(); // error
+
+            stream.writeEndDocument();
+        }
     }
 }
 
 void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
 {
-    const QString path = pathParts.join(QLatin1Char('/'));
-    const QString resource = m_baseDir + path;
-    qDebug() << "PUT" << path << resource;
+    const QString path = pathFiles(pathParts);
+    const QString resource = resourcePath(c, pathParts);
+    qCDebug(WEBDAV_PUT) << path << resource;
+    qCDebug(WEBDAV_PUT) << c->request()->uri() << c->request()->uri().toString();
 
     Request *req = c->request();
     if (!req->body()) {
-        qDebug() << "PUT Missing body";
+        qCWarning(WEBDAV_PUT) << "Missing body";
         c->response()->setStatus(Response::BadRequest);
         return;
     }
@@ -316,23 +351,75 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
     QFile file(resource);
     bool exists = file.exists();
     if (!file.open(QFile::WriteOnly | QFile::Truncate)) {
-        qDebug() << "PUT Could not open file for writting" << file.errorString();
+        qCWarning(WEBDAV_PUT) << "Could not open file for writting" << file.errorString();
         c->response()->setStatus(Response::BadRequest);
         return;
     }
 
-    QFileInfo info(resource);
-    const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
-    c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
+    QIODevice *uploadIO = req->body();
+    QCryptographicHash hash(QCryptographicHash::Md5);
+    char block[64 * 1024];
+    while (!uploadIO->atEnd()) {
+        qint64 in = uploadIO->read(block, sizeof(block));
+        if (in <= 0) {
+            break;
+        }
 
-    file.write(req->body()->readAll());
-    c->response()->setStatus(exists ? Response::OK : Response::Created);
+        if (file.write(block, in) != in) {
+            qCWarning(WEBDAV_PUT) << "Failed to write body";
+            break;
+        }
+        hash.addData(block, in);
+    }
+    file.close();
+
+    const QString etag = QString::fromLatin1(hash.result().toHex());
+    c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + etag + QLatin1Char('"'));
+
+    const QFileInfo info(resource);
+    QString error;
+    if (sqlFilesUpsert(path,  pathParts.mid(0, pathParts.size() - 1).join(QLatin1Char('/')), info, etag, Authentication::user(c).id(), error)) {
+        c->response()->setStatus(exists ? Response::OK : Response::Created);
+    } else {
+        c->response()->setStatus(Response::InternalServerError);
+        c->response()->setBody(error);
+        if (!exists) {
+            file.remove();
+        }
+        qDebug() << "put error" << error;
+    }
+    QSqlQuery query = CPreparedSqlQueryThreadForDB(
+                QStringLiteral("SELECT cloudlyst_put"
+                               "(:path, :name, :parent_path, :mtime, :mimetype, :size, :etag, :owner_id)"),
+                QStringLiteral("cloudlyst"));
+
+    query.bindValue(QStringLiteral(":path"), path);
+    query.bindValue(QStringLiteral(":parent_path"), pathParts.mid(0, pathParts.size() - 1).join(QLatin1Char('/')));
+    query.bindValue(QStringLiteral(":name"), info.fileName());
+    query.bindValue(QStringLiteral(":mtime"), info.lastModified().toUTC().toSecsSinceEpoch());
+    const QMimeType mime = m_db.mimeTypeForFile(info);
+    query.bindValue(QStringLiteral(":mimetype"), mime.name());
+    query.bindValue(QStringLiteral(":size"), info.size());
+    query.bindValue(QStringLiteral(":etag"), etag);
+    query.bindValue(QStringLiteral(":owner_id"), Authentication::user(c).id());
+
+    if (query.exec()) {
+        c->response()->setStatus(exists ? Response::OK : Response::Created);
+    } else {
+        const QString error = query.lastError().databaseText();
+        c->response()->setStatus(Response::InternalServerError);
+        c->response()->setBody(error);
+        if (!exists) {
+            file.remove();
+        }
+        qDebug() << "put error" << error;
+    }
 }
 
 void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 {
     Request *req = c->request();
-    const QString path = pathParts.join(QLatin1Char('/'));
+    const QString path = pathFiles(pathParts);
     qDebug() << Q_FUNC_INFO << path << req->body() << req->headers();
 
     int depth = 0;
@@ -357,10 +444,15 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
     const QString baseUri = QLatin1Char('/') + req->match() + QLatin1Char('/');
 
-    const QString resource = m_baseDir + path;
+    const QString resource = resourcePath(c, pathParts);
+    qDebug() << "***********" << resource << baseUri << path;
     if (depth != -1) {
-        const QFileInfo info(resource);
-        if (info.exists()) {
+        QSqlQuery query = CPreparedSqlQueryThreadForDB(QStringLiteral("SELECT m.name AS mimetype, f.* FROM cloudlyst.files f "
+                                                                      "INNER JOIN cloudlyst.mimetypes m ON f.mimetype = m.id "
+                                                                      "WHERE path = :path"),
+                                                       QStringLiteral("cloudlyst"));
+        query.bindValue(QStringLiteral(":path"), path);
+        if (query.exec() && query.next()) {
             stream.setAutoFormatting(true);
             stream.writeStartDocument();
             stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
@@ -368,18 +460,35 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
             stream.writeStartElement(QStringLiteral("d:multistatus"));
 
-            profindRequest(info, stream, baseUri, props);
+            profindRequest(query, stream, baseUri, props);
 
-            qDebug() << Q_FUNC_INFO << "DIR" << info.isDir() << "DEPTH" << depth;
+            const QString mime = query.value(QStringLiteral("mimetype")).toString();
+            bool isDir = mime == QLatin1String("inode/directory");
+
+            qDebug() << Q_FUNC_INFO << "DIR" << isDir << "DEPTH" << depth;
             qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
-            if (depth == 1 && info.isDir()) {
-                const QDir dir(resource);
-                qDebug() << Q_FUNC_INFO << "DIR" << dir;
+            if (depth == 1 && isDir) {
+//                const QDir dir(resource);
+                qint64 parentId = query.value(QStringLiteral("id")).toLongLong();
+                qDebug() << Q_FUNC_INFO << "DIR" << parentId;
 
-                for (const QFileInfo &info : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
-                    qDebug() << Q_FUNC_INFO << "DIR" << info.fileName();
-                    profindRequest(info, stream, baseUri, props);
+                query = CPreparedSqlQueryThreadForDB(QStringLiteral("SELECT m.name AS mimetype, f.* FROM cloudlyst.files f "
+                                                                    "INNER JOIN cloudlyst.mimetypes m ON f.mimetype = m.id "
+                                                                    "WHERE parent_id = :parent_id"),
+                                                     QStringLiteral("cloudlyst"));
+                query.bindValue(QStringLiteral(":parent_id"), parentId);
+
+                if (query.exec()) {
+                    while (query.next()) {
+                        profindRequest(query, stream, baseUri, props);
+                    }
                 }
+
+
+//                for (const QFileInfo &info : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
+//                    qDebug() << Q_FUNC_INFO << "DIR" << info.fileName();
+//                    profindRequest(info, stream, baseUri, props);
+//                }
             }
 
             stream.writeEndElement(); // multistatus
@@ -387,6 +496,35 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
             stream.writeEndDocument();
             return;
         }
+
+//        const QFileInfo info(resource);
+//        if (info.exists()) {
+//            stream.setAutoFormatting(true);
+//            stream.writeStartDocument();
+//            stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
+//            stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
+
+//            stream.writeStartElement(QStringLiteral("d:multistatus"));
+
+//            profindRequest(info, stream, baseUri, props);
+
+//            qDebug() << Q_FUNC_INFO << "DIR" << info.isDir() << "DEPTH" << depth;
+//            qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
+//            if (depth == 1 && info.isDir()) {
+//                const QDir dir(resource);
+//                qDebug() << Q_FUNC_INFO << "DIR" << dir;
+
+//                for (const QFileInfo &info : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
+//                    qDebug() << Q_FUNC_INFO << "DIR" << info.fileName();
+//                    profindRequest(info, stream, baseUri, props);
+//                }
+//            }
+
+//            stream.writeEndElement(); // multistatus
+
+//            stream.writeEndDocument();
+//            return;
+//        }
     }
 
     res->setStatus(Response::NotFound);
@@ -404,10 +542,10 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
     stream.writeEndDocument();
 }
 
-void Webdav::dav_PROPPATCH(Context *c, const QStringList &pathPart)
+void Webdav::dav_PROPPATCH(Context *c, const QStringList &pathParts)
 {
     Request *req = c->request();
-    const QString path = pathPart.join(QLatin1Char('/'));
+    const QString path = pathFiles(pathParts);
     qDebug() << Q_FUNC_INFO << path << req->body() << req->headers();
 
     if (!req->body()) {
@@ -425,11 +563,6 @@ void Webdav::dav_PROPPATCH(Context *c, const QStringList &pathPart)
 
     qDebug() << Q_FUNC_INFO << "depth" << depth;
     parsePropPatch(c, path);
-}
-
-void Webdav::Auto(Context *c)
-{
-
 }
 
 void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props)
@@ -725,6 +858,115 @@ void Webdav::profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, con
     m_propStorage->commit();
 }
 
+void Webdav::profindRequest(const QSqlQuery &query, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props)
+{
+    const QString path = query.value(QStringLiteral("path")).toString();
+
+    stream.writeStartElement(QStringLiteral("d:response"));
+    stream.writeTextElement(QStringLiteral("d:href"), baseUri + path.midRef(6));
+
+    stream.writeStartElement(QStringLiteral("d:propstat"));
+
+    stream.writeStartElement(QStringLiteral("d:prop"));
+
+    GetProperties propsNotFound;
+
+    const QString mime = query.value(QStringLiteral("mimetype")).toString();
+
+//        qDebug() << "FIND" << properties;
+    for (const Property &pData : props) {
+        qDebug() << "FIND data" << pData.name << pData.ns;
+        bool found = false;
+        if (pData.ns == QLatin1String("DAV:")) {
+            if (pData.name == QLatin1String("quota-used-bytes")) {
+                stream.writeEmptyElement(QStringLiteral("d:quota-used-bytes"));
+                continue;
+            } else if (pData.name == QLatin1String("quota-available-bytes")) {
+                stream.writeEmptyElement(QStringLiteral("d:quota-available-bytes"));
+                continue;
+            } else if (pData.name == QLatin1String("getcontenttype")) {
+                stream.writeTextElement(QStringLiteral("d:getcontenttype"), mime);
+                continue;
+            } else if (pData.name == QLatin1String("getlastmodified")) {
+                const QString dt = QLocale::c().toString(QDateTime::fromSecsSinceEpoch(query.value(QStringLiteral("mtime")).toLongLong()),
+                                                         QStringLiteral("ddd, dd MMM yyyy hh:mm:ss 'GMT"));
+                stream.writeTextElement(QStringLiteral("d:getlastmodified"), dt);
+                continue;
+            } else if (pData.name == QLatin1String("getcontentlength")) {
+                stream.writeTextElement(QStringLiteral("d:getcontentlength"), QString::number(query.value(QStringLiteral("size")).toLongLong()));
+                continue;
+            } else if (pData.name == QLatin1String("getetag")) {
+                const QString etag = query.value(QStringLiteral("etag")).toString();
+                stream.writeTextElement(QStringLiteral("d:getetag"), QLatin1Char('"') + etag + QLatin1Char('"'));
+                continue;
+            } else if (pData.name == QLatin1String("resourcetype")) {
+                stream.writeStartElement(QStringLiteral("d:resourcetype"));
+                if (mime == QLatin1String("inode/directory")) {
+                    stream.writeEmptyElement(QStringLiteral("d:collection"));
+                }
+                stream.writeEndElement(); // resourcetype
+                continue;
+            }
+        } else if (pData.ns == QLatin1String("http://owncloud.org/ns")) {
+            if (pData.name == QLatin1String("id")) {
+                stream.writeTextElement(pData.ns, QStringLiteral("id"), QStringLiteral("00123"));
+                continue;
+            } else if (pData.name == QLatin1String("downloadURL")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("downloadURL"));
+                continue;
+            } else if (pData.name == QLatin1String("permissions")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("permissions"));
+                continue;
+            } else if (pData.name == QLatin1String("data-fingerprint")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("data-fingerprint"));
+                continue;
+            } else if (pData.name == QLatin1String("share-types")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("share-types"));
+                continue;
+            } else if (pData.name == QLatin1String("dDC")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("dDC"));
+                continue;
+            } else if (pData.name == QLatin1String("checksums")) {
+                stream.writeEmptyElement(pData.ns, QStringLiteral("checksums"));
+                continue;
+            }
+        }
+
+        const QString value = m_propStorage->value(path, WebdavPropertyStorage::propertyKey(pData.name, pData.ns), found);
+        if (found) {
+            stream.writeTextElement(pData.ns, pData.name, value);
+            qDebug() << "WRITE" << pData.name << pData.ns << value;
+            continue;
+        }
+
+        propsNotFound.push_back(pData);
+    }
+
+    stream.writeEndElement(); // prop
+
+    stream.writeTextElement(QStringLiteral("d:status"), QStringLiteral("HTTP/1.1 200 OK"));
+
+    stream.writeEndElement(); // propstat
+
+    if (!propsNotFound.empty()) {
+        stream.writeStartElement(QStringLiteral("d:propstat"));
+        stream.writeStartElement(QStringLiteral("d:prop"));
+        for (const Property &prop : propsNotFound) {
+
+            stream.writeEmptyElement(prop.ns, prop.name);
+            qDebug() << "WRITE 404" << prop.name << prop.ns;
+
+        }
+        stream.writeEndElement(); // prop
+        stream.writeTextElement(QStringLiteral("d:status"), QStringLiteral("HTTP/1.1 404 Not Found"));
+        stream.writeEndElement(); // propstat
+    }
+
+    stream.writeEndElement(); // response
+
+    m_propStorage->commit();
+}
+
 bool Webdav::removeDestination(const QFileInfo &info, Response *res)
 {
     if (info.isFile()) {
@@ -746,4 +988,65 @@ bool Webdav::removeDestination(const QFileInfo &info, Response *res)
         }
     }
     return false;
+}
+
+bool Webdav::sqlFilesUpsert(const QString &path, const QString &parentPath, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error)
+{
+    QSqlQuery query = CPreparedSqlQueryThreadForDB(
+                QStringLiteral("SELECT cloudlyst_put"
+                               "(:path, :name, :parent_path, :mtime, :mimetype, :size, :etag, :owner_id)"),
+                QStringLiteral("cloudlyst"));
+
+    query.bindValue(QStringLiteral(":path"), path);
+    query.bindValue(QStringLiteral(":parent_path"), parentPath);
+    query.bindValue(QStringLiteral(":name"), info.fileName());
+    query.bindValue(QStringLiteral(":mtime"), info.lastModified().toUTC().toSecsSinceEpoch());
+    const QMimeType mime = m_db.mimeTypeForFile(info);
+    query.bindValue(QStringLiteral(":mimetype"), mime.name());
+    query.bindValue(QStringLiteral(":size"), info.size());
+    query.bindValue(QStringLiteral(":etag"), etag);
+    query.bindValue(QStringLiteral(":owner_id"), userId);
+
+    if (query.exec()) {
+        return true;
+    } else {
+        error = query.lastError().databaseText();
+        return false;
+    }
+}
+
+bool Webdav::sqlFilesDelete(const QString &path, const QVariant &userId, QString &error)
+{
+    QSqlQuery query = CPreparedSqlQueryThreadForDB(
+                QStringLiteral("DELETE FROM cloudlyst.files WHERE path = :path AND owner_id = :owner_id"),
+                QStringLiteral("cloudlyst"));
+
+    query.bindValue(QStringLiteral(":path"), path);
+    query.bindValue(QStringLiteral(":owner_id"), userId);
+
+    if (query.exec()) {
+        return true;
+    } else {
+        error = query.lastError().databaseText();
+        return false;
+    }
+}
+
+QString Webdav::pathFiles(const QStringList &pathParts) const
+{
+    if (pathParts.isEmpty()) {
+        return QStringLiteral("files");
+    }
+
+    return QLatin1String("files/") + pathParts.join(QLatin1Char('/'));
+}
+
+QString Webdav::basePath(Context *c) const
+{
+    return m_baseDir + Authentication::user(c).value(QStringLiteral("username")).toString() + QLatin1Char('/');
+}
+
+QString Webdav::resourcePath(Context *c, const QStringList &pathParts) const
+{
+    return basePath(c) + pathFiles(pathParts);
 }
