@@ -83,11 +83,13 @@ private:
     bool removeDestination(const QFileInfo &info, Response *res);
 
     bool sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error);
+    bool sqlFilesCopy(const QString &path, const QStringList &destPathParts, const QVariant &userId, QString &error);
     int sqlFilesDelete(const QString &path, const QVariant &userId, QString &error);
 
     inline QString pathFiles(const QStringList &pathParts) const;
     inline QString basePath(Context *c) const;
     inline QString resourcePath(Context *c, const QStringList &pathParts) const;
+    inline QStringList uriPathParts(const QString &path);
 
     QMimeDatabase m_db;
     QString m_baseDir;

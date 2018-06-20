@@ -4,6 +4,7 @@
 
 #include <Cutelyst/Plugins/Authentication/authentication.h>
 #include <Cutelyst/Plugins/Utils/Sql>
+#include <Cutelyst/utils.h>
 
 #include <QSqlQuery>
 #include <QSqlError>
@@ -141,13 +142,23 @@ void Webdav::dav_DELETE(Context *c, const QStringList &pathParts)
 void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
 {
     Request *req = c->request();
-    const QUrl destination(req->header(QStringLiteral("DESTINATION")));
     const QString path = pathFiles(pathParts);
-    QString destPath = destination.path().mid(8);
-    while (destPath.endsWith(QLatin1Char('/'))) {
-        destPath.chop(1);
+    const QString resource = resourcePath(c, pathParts);
+
+    const QUrl destination(req->header(QStringLiteral("DESTINATION")));
+    // match will usually be "webdav
+    // 2 = slashes in /webdav/
+    QString rawDestPath = destination.path(QUrl::FullyEncoded).mid(c->request()->match().size() + 2);
+    while (rawDestPath.endsWith(QLatin1Char('/'))) {
+        rawDestPath.chop(1);
     }
-    qDebug() << "COPY" << path << destPath << destination.path();
+    const QStringList destPathParts = uriPathParts(rawDestPath);
+    const QString destPath = pathFiles(destPathParts);
+    const QString destResource = resourcePath(c, destPathParts);
+
+    qDebug() << "COPY HEADER" << req->header(QStringLiteral("DESTINATION")) << "DESTINATION PATH" << destination.path(QUrl::FullyEncoded);
+    qDebug() << "COPY" << c->request()->match() << rawDestPath << destPathParts;
+    qDebug() << "COPY" << path << "TO" << destPath;
 
     Response *res = c->response();
     if (path == destPath) {
@@ -155,15 +166,15 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
         return;
     }
 
-    QFileInfo origInfo(m_baseDir + path);
+    const QFileInfo origInfo(resource);
     if (!origInfo.exists()) {
         res->setStatus(Response::NotFound);
         return;
     }
     qDebug() << "COPY" << origInfo.absoluteFilePath() << origInfo.isDir() << origInfo.isFile();
 
-    QFileInfo destInfo(m_baseDir + destPath);
-    bool overwrite = destInfo.exists();
+    const QFileInfo destInfo(destResource);
+    const bool overwrite = destInfo.exists();
     if (overwrite) {
         if (req->header(QStringLiteral("OVERWRITE")) == QLatin1String("F")) {
             qDebug() << "COPY: destination exists but overwrite is disallowed" << path << destPath << destination.path();
@@ -177,6 +188,14 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
             res->setStatus(Response::PreconditionFailed);
             return;
         }
+
+        QString error;
+        int ret = sqlFilesDelete(destPath, Authentication::user(c).id(), error);
+        if (ret < 0) {
+            qDebug() << "DELETE sql error" << error;
+            res->setStatus(Response::InternalServerError);
+            return;
+        }
     }
 
     if (origInfo.isFile()) {
@@ -187,9 +206,17 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
         }
 
         if (orig.copy(destInfo.absoluteFilePath())) {
-            res->setStatus(overwrite ? Response::NoContent : Response::Created);
+            QString error;
+            if (sqlFilesCopy(path, destPathParts, Authentication::user(c).id(), error)) {
+                res->setStatus(overwrite ? Response::NoContent : Response::Created);
+            } else {
+                qWarning() << "Failed to create SQL entry on COPY" << error;
+                res->setBody(error);
+                res->setStatus(Response::InternalServerError);
+                QFile::remove(destInfo.absoluteFilePath());
+            }
         } else {
-            QFileInfo destInfoPath(destInfo.absolutePath());
+            const QFileInfo destInfoPath(destInfo.absolutePath());
             if (!destInfoPath.exists() || !destInfoPath.isDir()) {
                 qWarning() << "Destination directory does not exists or is not a directory";
                 res->setStatus(Response::Conflict);
@@ -208,6 +235,14 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
             qWarning() << "Could not create destination";
             res->setStatus(Response::InternalServerError);
             return;
+        }
+
+        QString error;
+        if (!sqlFilesCopy(path, destPathParts, Authentication::user(c).id(), error)) {
+            qWarning() << "Failed to create SQL entry on COPY" << error;
+            res->setBody(error);
+            res->setStatus(Response::InternalServerError);
+            dir.rmdir(destAbsPath);
         }
 
         QDirIterator it(origPath, QDirIterator::Subdirectories);
@@ -235,14 +270,21 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
 
 void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
 {
+    Request *req = c->request();
     const QString path = pathFiles(pathParts);
     const QString resource = resourcePath(c, pathParts);
-    const QUrl destination(c->request()->header(QStringLiteral("DESTINATION")));
-    const QString destPath = destination.path().mid(8);
-    QString destResource = m_baseDir + destPath;
-    while (destResource.endsWith(QLatin1Char('/'))) {
-        destResource.chop(1);
+
+    const QUrl destination(req->header(QStringLiteral("DESTINATION")));
+    // match will usually be "webdav
+    // 2 = slashes in /webdav/
+    QString rawDestPath = destination.path(QUrl::FullyEncoded).mid(c->request()->match().size() + 2);
+    while (rawDestPath.endsWith(QLatin1Char('/'))) {
+        rawDestPath.chop(1);
     }
+    const QStringList destPathParts = uriPathParts(rawDestPath);
+    const QString destPath = pathFiles(destPathParts);
+    const QString destResource = resourcePath(c, destPathParts);
+
     qDebug() << "MOVE" << resource << destResource;
 
     Response *res = c->response();
@@ -250,7 +292,7 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     QFileInfo destInfo(destResource);
     bool overwrite = destInfo.exists();
     if (overwrite) {
-        if (c->req()->header(QStringLiteral("OVERWRITE")) == QLatin1String("F")) {
+        if (req->header(QStringLiteral("OVERWRITE")) == QLatin1String("F")) {
             qDebug() << "MOVE: destination exists but overwrite is disallowed" << path << destResource;
             res->setStatus(Response::PreconditionFailed);
             return;
@@ -1026,6 +1068,31 @@ bool Webdav::sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info,
     }
 }
 
+bool Webdav::sqlFilesCopy(const QString &path, const QStringList &destPathParts, const QVariant &userId, QString &error)
+{
+    const QString destPath = pathFiles(destPathParts);
+    const QString destParentPath = pathFiles(destPathParts.mid(0, destPathParts.size() - 1));
+    const QString destName = destPathParts.last();
+    qDebug() << "SQL COPY" << path << "TO" << destParentPath << destPath << destName << userId;
+    QSqlQuery query = CPreparedSqlQueryThreadForDB(
+                QStringLiteral("SELECT cloudlyst_copy"
+                               "(:path, :dest_parent_path, :dest_path, :dest_name, :owner_id)"),
+                QStringLiteral("cloudlyst"));
+
+    query.bindValue(QStringLiteral(":path"), path);
+    query.bindValue(QStringLiteral(":dest_parent_path"), destParentPath);
+    query.bindValue(QStringLiteral(":dest_path"), destPath);
+    query.bindValue(QStringLiteral(":dest_name"), destName);
+    query.bindValue(QStringLiteral(":owner_id"), userId);
+
+    if (query.exec()) {
+        return true;
+    } else {
+        error = query.lastError().databaseText();
+        return false;
+    }
+}
+
 int Webdav::sqlFilesDelete(const QString &path, const QVariant &userId, QString &error)
 {
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
@@ -1060,4 +1127,15 @@ QString Webdav::basePath(Context *c) const
 QString Webdav::resourcePath(Context *c, const QStringList &pathParts) const
 {
     return basePath(c) + pathFiles(pathParts);
+}
+
+QStringList Webdav::uriPathParts(const QString &path)
+{
+    QStringList ret;
+    QVector<QStringRef> parts = path.splitRef(QLatin1Char('/'));
+    for (const QStringRef strRef : parts) {
+        QByteArray ba = strRef.toLatin1();
+        ret.append(Utils::decodePercentEncoding(&ba));
+    }
+    return ret;
 }
