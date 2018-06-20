@@ -82,8 +82,8 @@ private:
     void profindRequest(const QSqlQuery &query, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
     bool removeDestination(const QFileInfo &info, Response *res);
 
-    bool sqlFilesUpsert(const QString &path, const QString &parentPath, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error);
-    bool sqlFilesDelete(const QString &path, const QVariant &userId, QString &error);
+    bool sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error);
+    int sqlFilesDelete(const QString &path, const QVariant &userId, QString &error);
 
     inline QString pathFiles(const QStringList &pathParts) const;
     inline QString basePath(Context *c) const;

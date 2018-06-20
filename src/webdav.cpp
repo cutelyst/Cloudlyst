@@ -121,12 +121,20 @@ void Webdav::dav_DELETE(Context *c, const QStringList &pathParts)
         if (removeDestination(info, res)) {
             res->setStatus(Response::NoContent);
             QString error;
-            if (!sqlFilesDelete(path, Authentication::user(c).id(), error)) {
+            if (sqlFilesDelete(path, Authentication::user(c).id(), error) < 0) {
                 qDebug() << "DELETE sql error" << error;
             }
         }
     } else {
-        res->setStatus(Response::NotFound);
+        QString error;
+        int ret = sqlFilesDelete(path, Authentication::user(c).id(), error);
+        if (ret < 0) {
+            qDebug() << "DELETE sql error" << error;
+        } else if (ret == 0) {
+            res->setStatus(Response::NotFound);
+        } else {
+            res->setStatus(Response::NoContent);
+        }
     }
 }
 
@@ -306,7 +314,7 @@ void Webdav::dav_MKCOL(Context *c, const QStringList &pathParts)
             c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + etag + QLatin1Char('"'));
 
             QString error;
-            if (sqlFilesUpsert(path,  pathParts.mid(0, pathParts.size() - 1).join(QLatin1Char('/')), dirInfo, etag, Authentication::user(c).id(), error)) {
+            if (sqlFilesUpsert(pathParts, dirInfo, etag, Authentication::user(c).id(), error)) {
                 c->response()->setStatus(Response::Created);
             } else {
                 c->response()->setStatus(Response::InternalServerError);
@@ -378,7 +386,7 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
 
     const QFileInfo info(resource);
     QString error;
-    if (sqlFilesUpsert(path,  pathParts.mid(0, pathParts.size() - 1).join(QLatin1Char('/')), info, etag, Authentication::user(c).id(), error)) {
+    if (sqlFilesUpsert(pathParts, info, etag, Authentication::user(c).id(), error)) {
         c->response()->setStatus(exists ? Response::OK : Response::Created);
     } else {
         c->response()->setStatus(Response::InternalServerError);
@@ -448,7 +456,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
     qDebug() << "***********" << resource << baseUri << path;
     if (depth != -1) {
         QSqlQuery query = CPreparedSqlQueryThreadForDB(QStringLiteral("SELECT m.name AS mimetype, f.* FROM cloudlyst.files f "
-                                                                      "INNER JOIN cloudlyst.mimetypes m ON f.mimetype = m.id "
+                                                                      "INNER JOIN cloudlyst.mimetypes m ON f.mimetype_id = m.id "
                                                                       "WHERE path = :path"),
                                                        QStringLiteral("cloudlyst"));
         query.bindValue(QStringLiteral(":path"), path);
@@ -473,7 +481,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
                 qDebug() << Q_FUNC_INFO << "DIR" << parentId;
 
                 query = CPreparedSqlQueryThreadForDB(QStringLiteral("SELECT m.name AS mimetype, f.* FROM cloudlyst.files f "
-                                                                    "INNER JOIN cloudlyst.mimetypes m ON f.mimetype = m.id "
+                                                                    "INNER JOIN cloudlyst.mimetypes m ON f.mimetype_id = m.id "
                                                                     "WHERE parent_id = :parent_id"),
                                                      QStringLiteral("cloudlyst"));
                 query.bindValue(QStringLiteral(":parent_id"), parentId);
@@ -990,8 +998,11 @@ bool Webdav::removeDestination(const QFileInfo &info, Response *res)
     return false;
 }
 
-bool Webdav::sqlFilesUpsert(const QString &path, const QString &parentPath, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error)
+bool Webdav::sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error)
 {
+    const QString path = pathFiles(pathParts);
+    const QString parentPath = pathFiles(pathParts.mid(0, pathParts.size() - 1));
+    qDebug() << "SQL UPSERT" << path << parentPath << etag << userId;
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
                 QStringLiteral("SELECT cloudlyst_put"
                                "(:path, :name, :parent_path, :mtime, :mimetype, :size, :etag, :owner_id)"),
@@ -1015,7 +1026,7 @@ bool Webdav::sqlFilesUpsert(const QString &path, const QString &parentPath, cons
     }
 }
 
-bool Webdav::sqlFilesDelete(const QString &path, const QVariant &userId, QString &error)
+int Webdav::sqlFilesDelete(const QString &path, const QVariant &userId, QString &error)
 {
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
                 QStringLiteral("DELETE FROM cloudlyst.files WHERE path = :path AND owner_id = :owner_id"),
@@ -1025,10 +1036,10 @@ bool Webdav::sqlFilesDelete(const QString &path, const QVariant &userId, QString
     query.bindValue(QStringLiteral(":owner_id"), userId);
 
     if (query.exec()) {
-        return true;
+        return query.numRowsAffected();
     } else {
         error = query.lastError().databaseText();
-        return false;
+        return -1;
     }
 }
 
