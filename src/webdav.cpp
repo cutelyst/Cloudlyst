@@ -303,6 +303,14 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
             res->setStatus(Response::InternalServerError);
             return;
         }
+
+        QString error;
+        int ret = sqlFilesDelete(destPath, Authentication::user(c).id(), error);
+        if (ret < 0) {
+            qDebug() << "DELETE sql error" << error;
+            res->setStatus(Response::InternalServerError);
+            return;
+        }
     }
 
     QFileInfo srcInfo(resource);
