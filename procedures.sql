@@ -53,7 +53,7 @@ BEGIN
             INSERT INTO cloudlyst.files (path, name, mtime, mimetype_id, size, etag, owner_id, parent_id) VALUES
                 ('files', 'files', v_mtime, NULL, 0, NULL, v_owner_id, NULL) RETURNING id INTO v_parent_id;
         END IF;
-    END IF; 
+    END IF;
 
     INSERT INTO cloudlyst.files (path, name, mtime, mimetype_id, size, etag, owner_id, parent_id)
         (SELECT v_dest_path, v_dest_name, mtime, mimetype_id, size, etag, v_owner_id, v_parent_id FROM cloudlyst.files WHERE path = v_path) 
@@ -65,5 +65,13 @@ BEGIN
     END LOOP;
     
     RETURN v_file_id;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cloudlyst_move(v_path varchar, v_dest_path varchar, v_dest_name varchar, v_owner_id integer) RETURNS void AS $$
+BEGIN
+    UPDATE cloudlyst.files SET path = v_dest_path, name = v_dest_name WHERE path = v_path AND owner_id = v_owner_id;
+    
+    UPDATE cloudlyst.files SET path = overlay(path placing v_dest_path||'/' from 1 for length(v_path) + 1) WHERE path LIKE v_path||'/%' AND owner_id = v_owner_id;
 END;
 $$ LANGUAGE plpgsql;

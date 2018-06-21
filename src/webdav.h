@@ -16,6 +16,7 @@ struct Property
 };
 typedef std::vector<Property> GetProperties;
 
+class QDir;
 class QSqlQuery;
 class QFileInfo;
 class QXmlStreamReader;
@@ -84,10 +85,12 @@ private:
 
     bool sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error);
     bool sqlFilesCopy(const QString &path, const QStringList &destPathParts, const QVariant &userId, QString &error);
+    bool sqlFilesMove(const QString &path, const QString &destPath, const QString &destName, const QVariant &userId, QString &error);
     int sqlFilesDelete(const QString &path, const QVariant &userId, QString &error);
 
     inline QString pathFiles(const QStringList &pathParts) const;
     inline QString basePath(Context *c) const;
+    inline QDir baseDir(Context *c) const;
     inline QString resourcePath(Context *c, const QStringList &pathParts) const;
     inline QStringList uriPathParts(const QString &path);
 

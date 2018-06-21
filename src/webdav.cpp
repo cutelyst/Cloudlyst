@@ -273,6 +273,7 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     Request *req = c->request();
     const QString path = pathFiles(pathParts);
     const QString resource = resourcePath(c, pathParts);
+    const QVariant userId = Authentication::user(c).id();
 
     const QUrl destination(req->header(QStringLiteral("DESTINATION")));
     // match will usually be "webdav
@@ -286,6 +287,8 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     const QString destResource = resourcePath(c, destPathParts);
 
     qDebug() << "MOVE" << resource << destResource;
+    const QDir base = baseDir(c);
+    qDebug() << "MOVE relative" << base.relativeFilePath(resource) << base.relativeFilePath(destResource);
 
     Response *res = c->response();
 
@@ -305,7 +308,7 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
         }
 
         QString error;
-        int ret = sqlFilesDelete(destPath, Authentication::user(c).id(), error);
+        int ret = sqlFilesDelete(destPath, userId, error);
         if (ret < 0) {
             qDebug() << "DELETE sql error" << error;
             res->setStatus(Response::InternalServerError);
@@ -319,7 +322,16 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     if (srcInfo.isFile()) {
         QFile file(resource);
         if (file.rename(destResource)) {
+            QString error;
+            int ret = sqlFilesMove(base.relativeFilePath(resource), base.relativeFilePath(destResource), destination.fileName(QUrl::FullyDecoded), userId, error);
+            if (ret < 0) {
+                qDebug() << "MOVE sql error" << error;
+                res->setStatus(Response::InternalServerError);
+                QFile::rename(destResource, resource);
+                return;
+            }
             res->setStatus(overwrite ? Response::NoContent : Response::Created);
+
             m_propStorage->moveValues(path, destPath);
             m_propStorage->commit();
         } else {
@@ -331,6 +343,15 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     } else if (srcInfo.isDir()) {
         QDir dir;
         if (dir.rename(resource, destResource)) {
+            QString error;
+            int ret = sqlFilesMove(base.relativeFilePath(resource), base.relativeFilePath(destResource), destination.fileName(QUrl::FullyDecoded), userId, error);
+            if (ret < 0) {
+                qDebug() << "MOVE sql error" << error;
+                res->setStatus(Response::InternalServerError);
+                QFile::rename(destResource, resource);
+                return;
+            }
+
             res->setStatus(overwrite ? Response::NoContent : Response::Created);
             m_propStorage->moveValues(path, destPath);
             m_propStorage->commit();
@@ -526,7 +547,6 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
             qDebug() << Q_FUNC_INFO << "DIR" << isDir << "DEPTH" << depth;
             qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
             if (depth == 1 && isDir) {
-//                const QDir dir(resource);
                 qint64 parentId = query.value(QStringLiteral("id")).toLongLong();
                 qDebug() << Q_FUNC_INFO << "DIR" << parentId;
 
@@ -541,12 +561,6 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
                         profindRequest(query, stream, baseUri, props);
                     }
                 }
-
-
-//                for (const QFileInfo &info : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
-//                    qDebug() << Q_FUNC_INFO << "DIR" << info.fileName();
-//                    profindRequest(info, stream, baseUri, props);
-//                }
             }
 
             stream.writeEndElement(); // multistatus
@@ -554,35 +568,6 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
             stream.writeEndDocument();
             return;
         }
-
-//        const QFileInfo info(resource);
-//        if (info.exists()) {
-//            stream.setAutoFormatting(true);
-//            stream.writeStartDocument();
-//            stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
-//            stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
-
-//            stream.writeStartElement(QStringLiteral("d:multistatus"));
-
-//            profindRequest(info, stream, baseUri, props);
-
-//            qDebug() << Q_FUNC_INFO << "DIR" << info.isDir() << "DEPTH" << depth;
-//            qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
-//            if (depth == 1 && info.isDir()) {
-//                const QDir dir(resource);
-//                qDebug() << Q_FUNC_INFO << "DIR" << dir;
-
-//                for (const QFileInfo &info : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot)) {
-//                    qDebug() << Q_FUNC_INFO << "DIR" << info.fileName();
-//                    profindRequest(info, stream, baseUri, props);
-//                }
-//            }
-
-//            stream.writeEndElement(); // multistatus
-
-//            stream.writeEndDocument();
-//            return;
-//        }
     }
 
     res->setStatus(Response::NotFound);
@@ -1101,6 +1086,25 @@ bool Webdav::sqlFilesCopy(const QString &path, const QStringList &destPathParts,
     }
 }
 
+bool Webdav::sqlFilesMove(const QString &path, const QString &destPath, const QString &destName, const QVariant &userId, QString &error)
+{
+    QSqlQuery query = CPreparedSqlQueryThreadForDB(
+                QStringLiteral("SELECT cloudlyst_move(:path, :destPath, :destName, :owner_id)"),
+                QStringLiteral("cloudlyst"));
+
+    query.bindValue(QStringLiteral(":path"), path);
+    query.bindValue(QStringLiteral(":destPath"), destPath);
+    query.bindValue(QStringLiteral(":destName"), destName);
+    query.bindValue(QStringLiteral(":owner_id"), userId);
+
+    if (query.exec()) {
+        return query.numRowsAffected();
+    } else {
+        error = query.lastError().databaseText();
+        return -1;
+    }
+}
+
 int Webdav::sqlFilesDelete(const QString &path, const QVariant &userId, QString &error)
 {
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
@@ -1130,6 +1134,11 @@ QString Webdav::pathFiles(const QStringList &pathParts) const
 QString Webdav::basePath(Context *c) const
 {
     return m_baseDir + Authentication::user(c).value(QStringLiteral("username")).toString() + QLatin1Char('/');
+}
+
+QDir Webdav::baseDir(Context *c) const
+{
+    return QDir(basePath(c));
 }
 
 QString Webdav::resourcePath(Context *c, const QStringList &pathParts) const
