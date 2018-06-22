@@ -24,8 +24,8 @@ public:
     void statusPhp(Context *c);
 
     // Hackery to work with NextCloud-client
-    C_ATTR(remoteDanielPhp, :Path('remote.php/dav/files/daniel') :AutoArgs)
-    void remoteDanielPhp(Context *c, const QStringList &pathParts);
+    C_ATTR(remoteDavPhp, :Path('remote.php/dav/files') :AutoArgs)
+    void remoteDavPhp(Context *c, const QStringList &pathParts);
 
     C_ATTR(remotePhp, :Path('remote.php/webdav') :AutoArgs)
     void remotePhp(Context *c, const QStringList &pathParts);

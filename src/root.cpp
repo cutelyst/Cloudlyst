@@ -3,6 +3,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+#include <QLoggingCategory>
+
 using namespace Cutelyst;
 
 Root::Root(QObject *parent) : Controller(parent)
@@ -36,9 +38,20 @@ void Root::statusPhp(Context *c)
                                      });
 }
 
-void Root::remoteDanielPhp(Context *c, const QStringList &pathParts)
+void Root::remoteDavPhp(Context *c, const QStringList &pathParts)
 {
     Q_UNUSED(pathParts)
+    qDebug() << c->request()->match() << pathParts;
+    const QStringList argsWithoutUser = pathParts.mid(1);
+    c->request()->setArguments(argsWithoutUser);
+
+    QString match = c->request()->match();
+    int pos = match.indexOf(QLatin1Char('/'));
+    if (pos == -1) {
+        c->request()->setMatch(QString());
+    } else {
+        c->request()->setMatch(match.mid(pos + 1));
+    }
     c->forward(QStringLiteral("/webdav/dav"));
 }
 
