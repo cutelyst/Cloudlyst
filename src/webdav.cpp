@@ -60,20 +60,18 @@ void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
     qDebug() << Q_FUNC_INFO << pathParts;
     Response *res = c->response();
 
-    const QString resource = resourcePath(c, pathParts);
+    const QString path = pathFiles(pathParts);
 
-    QFileInfo info(resource);
-    if (info.exists()) {
-        const QMimeType mime = m_db.mimeTypeForFile(resource);
-
+    QString error;
+    FileItem fileItem = sqlFilesItem(path, Authentication::user(c).id(), error);
+    if (fileItem.id) {
         Headers &headers = res->headers();
-        headers.setContentType(mime.name());
-        headers.setContentDispositionAttachment(info.fileName());
-        headers.setContentLength(info.size());
-
-        const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
-        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
+        headers.setContentType(fileItem.mimetype);
+        headers.setContentDispositionAttachment(fileItem.name);
+        headers.setContentLength(fileItem.size);
+        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + fileItem.etag + QLatin1Char('"'));
     } else {
+        qDebug() << error;
         res->setStatus(Response::NotFound);
         res->setBody(QByteArrayLiteral("Content not found."));
     }
@@ -85,22 +83,24 @@ void Webdav::dav_GET(Context *c, const QStringList &pathParts)
     Response *res = c->response();
 
     const QString resource = resourcePath(c, pathParts);
+    const QString path = pathFiles(pathParts);
+
+    QString error;
+    FileItem fileItem = sqlFilesItem(path, Authentication::user(c).id(), error);
 
     auto file = new QFile(resource, c);
-    if (file->open(QIODevice::ReadOnly)) {
-        res->setBody(file);
-        const QMimeType mime = m_db.mimeTypeForFile(resource);
-
+    if (fileItem.id && file->open(QIODevice::ReadOnly)) {
         Headers &headers = res->headers();
-        headers.setContentType(mime.name());
-        headers.setContentDispositionAttachment(file->fileName());
+        headers.setContentType(fileItem.mimetype);
+        headers.setContentDispositionAttachment(fileItem.name);
+        headers.setContentLength(fileItem.size);
+        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + fileItem.etag + QLatin1Char('"'));
 
-        const QFileInfo info(resource);
-        const QByteArray hash = QCryptographicHash::hash(info.lastModified().toUTC().toString().toUtf8(), QCryptographicHash::Md5);
-        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + QString::fromLatin1(hash.toHex()) + QLatin1Char('"'));
+        // TODO also use X-SENDFILE
+        res->setBody(file);
     } else {
         QFileInfo info(resource);
-        if (info.isDir()) {
+        if (fileItem.id && info.isDir()) {
             res->setStatus(Response::MethodNotAllowed);
             res->setBody(QByteArrayLiteral("This is the WebDAV interface. It can only be accessed by WebDAV clients."));
         } else {
@@ -1061,16 +1061,18 @@ std::vector<FileItem> Webdav::sqlFilesItems(qint64 parentId, QString &error)
                 QStringLiteral("cloudlyst"));
     query.bindValue(QStringLiteral(":parent_id"), parentId);
 
-    if (query.exec() && query.next()) {
-        FileItem ret;
-        ret.id = query.value(0).toLongLong();
-        ret.path = query.value(1).toString();
-        ret.name = query.value(2).toString();
-        ret.size = query.value(3).toLongLong();
-        ret.mimetype = query.value(4).toString();
-        ret.etag == query.value(5).toString();
-        ret.mtime == query.value(6).toLongLong();
-        rets.push_back(ret);
+    if (query.exec()) {
+        while (query.next()) {
+            FileItem ret;
+            ret.id = query.value(0).toLongLong();
+            ret.path = query.value(1).toString();
+            ret.name = query.value(2).toString();
+            ret.size = query.value(3).toLongLong();
+            ret.mimetype = query.value(4).toString();
+            ret.etag == query.value(5).toString();
+            ret.mtime == query.value(6).toLongLong();
+            rets.push_back(ret);
+        }
     } else {
         error = query.lastError().databaseText();
         return rets;
