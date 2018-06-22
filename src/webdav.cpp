@@ -354,6 +354,16 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
             qDebug() << "MOVE dir failed";
             res->setStatus(Response::InternalServerError);
         }
+    } else if (!srcInfo.exists()) {
+        QString error;
+        int ret = sqlFilesDelete(path, userId, error);
+        if (ret < 0) {
+            qDebug() << "MOVE sql error" << error;
+            res->setStatus(Response::InternalServerError);
+            return;
+        } else {
+            res->setStatus(Response::Gone);
+        }
     }
 }
 
