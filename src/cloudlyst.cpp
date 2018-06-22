@@ -112,9 +112,10 @@ bool Cloudlyst::createDB()
     if (!tables.contains(QLatin1String("cloudlyst.file_properties")) &&
             !query.exec(QStringLiteral("CREATE TABLE cloudlyst.file_properties "
                                        "( id SERIAL PRIMARY KEY"
-                                       ", file_id bigint REFERENCES cloudlyst.files(id) NOT NULL"
-                                       ", name character varying(255) UNIQUE NOT NULL"
-                                       ", value character varying UNIQUE NOT NULL"
+                                       ", file_id bigint REFERENCES cloudlyst.files(id) ON DELETE CASCADE NOT NULL "
+                                       ", name character varying(255) NOT NULL"
+                                       ", value character varying NOT NULL"
+                                       ", UNIQUE(file_id, name)"
                                        ");"))) {
         qDebug() << "error" << query.lastError().databaseText();
         return false;

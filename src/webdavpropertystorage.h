@@ -5,7 +5,7 @@
 #include <QHash>
 
 typedef QHash<QString, QString> PropertyValueHash;
-typedef QHash<QString, PropertyValueHash> PathPropertyHash;
+typedef QHash<qint64, PropertyValueHash> PathPropertyHash;
 
 class WebdavPropertyStorage : public QObject
 {
@@ -27,13 +27,9 @@ public:
 
     virtual bool rollback();
 
-    virtual bool setValue(const QString &path, const QString &key, const QString &value);
+    virtual bool setValue(qint64 file_id, const QString &key, const QString &value);
 
-    virtual bool remove(const QString &path, const QString &key);
-
-    virtual bool moveValues(const QString &path, const QString &newPath);
-
-    virtual QString value(const QString &path, const QString &key, bool &found) const;
+    virtual bool remove(qint64 file_id, const QString &key);
 
 private:
     PathPropertyHash m_pathProps;

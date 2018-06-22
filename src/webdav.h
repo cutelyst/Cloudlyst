@@ -9,12 +9,23 @@ using namespace Cutelyst;
 
 typedef QHash<QString, std::pair<QString, QString> > Properties;
 
+struct FileItem
+{
+    QString path;
+    QString name;
+    QString etag;
+    QString mimetype;
+    qint64 mtime = -1;
+    qint64 id = 0;
+    qint64 size = -1;
+};
+
 struct Property
 {
     QString name;
     QString ns;
 };
-typedef std::vector<Property> GetProperties;
+typedef QVector<Property> GetProperties;
 
 class QDir;
 class QSqlQuery;
@@ -75,18 +86,19 @@ private:
     void parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetProperties &props);
     bool parseProps(Context *c, const QString &path, GetProperties &props);
 
-    bool parsePropPatchValue(QXmlStreamReader &xml, const QString &path, bool set);
-    bool parsePropPatchProperty(QXmlStreamReader &xml, const QString &path, bool set);
-    void parsePropPatchUpdate(QXmlStreamReader &xml, const QString &path);
-    bool parsePropPatch(Context *c, const QString &path);
-    void profindRequest(const QFileInfo &info, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
-    void profindRequest(const QSqlQuery &query, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
+    bool parsePropPatchValue(QXmlStreamReader &xml, qint64 path, bool set);
+    bool parsePropPatchProperty(QXmlStreamReader &xml, qint64 path, bool set);
+    void parsePropPatchUpdate(QXmlStreamReader &xml, qint64 path);
+    bool parsePropPatch(Context *c, qint64 path);
+    void profindRequest(const FileItem &file, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props, const QVariant &ownerId);
     bool removeDestination(const QFileInfo &info, Response *res);
 
     bool sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info, const QString &etag, const QVariant &userId, QString &error);
     bool sqlFilesCopy(const QString &path, const QStringList &destPathParts, const QVariant &userId, QString &error);
     bool sqlFilesMove(const QString &path, const QString &destPath, const QString &destName, const QVariant &userId, QString &error);
     int sqlFilesDelete(const QString &path, const QVariant &userId, QString &error);
+    FileItem sqlFilesItem(const QString &path, const QVariant &userId, QString &error);
+    std::vector<FileItem> sqlFilesItems(qint64 parentId, QString &error);
 
     inline QString pathFiles(const QStringList &pathParts) const;
     inline QString basePath(Context *c) const;
