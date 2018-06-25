@@ -101,6 +101,7 @@ bool Cloudlyst::createDB()
                                        ", name character varying"
                                        ", mimetype_id integer REFERENCES cloudlyst.mimetypes(id)"
                                        ", mtime integer NOT NULL "
+                                       ", storage_mtime integer NOT NULL "
                                        ", size bigint NOT NULL"
                                        ", etag character varying(40) NOT NULL"
                                        ", UNIQUE(path, owner_id)"

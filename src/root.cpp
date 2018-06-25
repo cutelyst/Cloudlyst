@@ -41,17 +41,20 @@ void Root::statusPhp(Context *c)
 void Root::remoteDavPhp(Context *c, const QStringList &pathParts)
 {
     Q_UNUSED(pathParts)
+    if (pathParts.isEmpty()) {
+        c->response()->setStatus(Response::BadRequest);
+        return;
+    }
+
     qDebug() << c->request()->match() << pathParts;
     const QStringList argsWithoutUser = pathParts.mid(1);
     c->request()->setArguments(argsWithoutUser);
 
-    QString match = c->request()->match();
-    int pos = match.indexOf(QLatin1Char('/'));
-    if (pos == -1) {
-        c->request()->setMatch(QString());
-    } else {
-        c->request()->setMatch(match.mid(pos + 1));
-    }
+    const QString match = c->request()->match() + QLatin1Char('/') + pathParts.first();
+    qDebug() << "MATCH" << match;
+
+    c->request()->setMatch(match);
+
     c->forward(QStringLiteral("/webdav/dav"));
 }
 
