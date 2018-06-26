@@ -4,6 +4,7 @@
 #include <Cutelyst/Controller>
 
 #include <QMimeDatabase>
+#include <QStorageInfo>
 
 using namespace Cutelyst;
 
@@ -108,6 +109,7 @@ private:
 
     QMimeDatabase m_db;
     QString m_baseDir;
+    QStorageInfo m_storageInfo;
     WebdavPropertyStorage *m_propStorage;
 };
 

@@ -38,6 +38,7 @@ Webdav::Webdav(QObject *parent) : Controller(parent)
     }
     QDir().mkpath(m_baseDir);
     qDebug() << "BASE" << m_baseDir;
+    m_storageInfo.setPath(m_baseDir);
 
     m_propStorage = new WebdavPgSqlPropertyStorage(this);
 }
@@ -548,7 +549,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
             profindRequest(file, stream, baseUri, props, userId);
 
             const QString mime = file.mimetype;
-            bool isDir = mime == QLatin1String("inode/directory");
+            bool isDir = mime == QLatin1String("httpd/unix-directory");
 
             qDebug() << Q_FUNC_INFO << "DIR" << isDir << "DEPTH" << depth;
             qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
@@ -816,16 +817,25 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
         bool found = false;
         if (pData.ns == QLatin1String("DAV:")) {
             if (pData.name == QLatin1String("quota-used-bytes")) {
-                stream.writeEmptyElement(QStringLiteral("d:quota-used-bytes"));
+                if (path == QLatin1String("files")) {
+                    stream.writeTextElement(QStringLiteral("d:quota-used-bytes"), QString::number(file.size));
+                } else {
+                    stream.writeEmptyElement(QStringLiteral("d:quota-used-bytes"));
+                }
                 continue;
             } else if (pData.name == QLatin1String("quota-available-bytes")) {
-                stream.writeEmptyElement(QStringLiteral("d:quota-available-bytes"));
+                if (path == QLatin1String("files")) {
+                    m_storageInfo.refresh();
+                    stream.writeTextElement(QStringLiteral("d:quota-available-bytes"), QString::number(m_storageInfo.bytesAvailable()));
+                } else {
+                    stream.writeEmptyElement(QStringLiteral("d:quota-available-bytes"));
+                }
                 continue;
             } else if (pData.name == QLatin1String("getcontenttype")) {
                 stream.writeTextElement(QStringLiteral("d:getcontenttype"), mime);
                 continue;
             } else if (pData.name == QLatin1String("getlastmodified")) {
-                const QString dt = QLocale::c().toString(QDateTime::fromSecsSinceEpoch(file.mtime),
+                const QString dt = QLocale::c().toString(QDateTime::fromSecsSinceEpoch(file.mtime).toUTC(),
                                                          QStringLiteral("ddd, dd MMM yyyy hh:mm:ss 'GMT"));
                 stream.writeTextElement(QStringLiteral("d:getlastmodified"), dt);
                 continue;
@@ -838,7 +848,7 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
                 continue;
             } else if (pData.name == QLatin1String("resourcetype")) {
                 stream.writeStartElement(QStringLiteral("d:resourcetype"));
-                if (mime == QLatin1String("inode/directory")) {
+                if (mime == QLatin1String("httpd/unix-directory")) {
                     stream.writeEmptyElement(QStringLiteral("d:collection"));
                 }
                 stream.writeEndElement(); // resourcetype
@@ -964,8 +974,14 @@ bool Webdav::sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info,
     }
 
     query.bindValue(QStringLiteral(":storage_mtime"), info.lastModified().toSecsSinceEpoch());
-    const QMimeType mime = m_db.mimeTypeForFile(info);
-    query.bindValue(QStringLiteral(":mimetype"), mime.name());
+
+    if (info.isDir()) {
+        query.bindValue(QStringLiteral(":mimetype"), QStringLiteral("httpd/unix-directory"));
+    } else {
+        const QMimeType mime = m_db.mimeTypeForFile(info);
+        query.bindValue(QStringLiteral(":mimetype"), mime.name());
+    }
+
     query.bindValue(QStringLiteral(":size"), info.size());
     query.bindValue(QStringLiteral(":etag"), etag);
     query.bindValue(QStringLiteral(":owner_id"), userId);
@@ -1073,7 +1089,7 @@ std::vector<FileItem> Webdav::sqlFilesItems(qint64 parentId, QString &error)
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
                 QStringLiteral("SELECT f.id, f.path, f.name, f.size, m.name, f.etag, f.mtime "
                                "FROM cloudlyst.files f "
-                               "INNER JOIN  cloudlyst.mimetypes m ON m.id = f.mimetype_id "
+                               "INNER JOIN cloudlyst.mimetypes m ON m.id = f.mimetype_id "
                                "WHERE parent_id = :parent_id"),
                 QStringLiteral("cloudlyst"));
     query.bindValue(QStringLiteral(":parent_id"), parentId);
