@@ -817,14 +817,14 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
         bool found = false;
         if (pData.ns == QLatin1String("DAV:")) {
             if (pData.name == QLatin1String("quota-used-bytes")) {
-                if (path == QLatin1String("files")) {
+                if (mime == QLatin1String("httpd/unix-directory")) {
                     stream.writeTextElement(QStringLiteral("d:quota-used-bytes"), QString::number(file.size));
                 } else {
                     stream.writeEmptyElement(QStringLiteral("d:quota-used-bytes"));
                 }
                 continue;
             } else if (pData.name == QLatin1String("quota-available-bytes")) {
-                if (path == QLatin1String("files")) {
+                if (mime == QLatin1String("httpd/unix-directory")) {
                     m_storageInfo.refresh();
                     stream.writeTextElement(QStringLiteral("d:quota-available-bytes"), QString::number(m_storageInfo.bytesAvailable()));
                 } else {
@@ -977,12 +977,13 @@ bool Webdav::sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info,
 
     if (info.isDir()) {
         query.bindValue(QStringLiteral(":mimetype"), QStringLiteral("httpd/unix-directory"));
+        query.bindValue(QStringLiteral(":size"), 0);
     } else {
         const QMimeType mime = m_db.mimeTypeForFile(info);
         query.bindValue(QStringLiteral(":mimetype"), mime.name());
+        query.bindValue(QStringLiteral(":size"), info.size());
     }
 
-    query.bindValue(QStringLiteral(":size"), info.size());
     query.bindValue(QStringLiteral(":etag"), etag);
     query.bindValue(QStringLiteral(":owner_id"), userId);
 

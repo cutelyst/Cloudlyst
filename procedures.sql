@@ -7,6 +7,44 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION cloudlyst_files_update_parent_etag() RETURNS trigger AS $$
+DECLARE
+    v_size_diff bigint;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.parent_id != OLD.parent_id THEN
+            UPDATE cloudlyst.files SET size = size - OLD.size, mtime = extract(epoch from now()), etag = to_hex(mtime)||to_hex(id) WHERE id = OLD.parent_id;
+            UPDATE cloudlyst.files SET size = size + NEW.size, mtime = extract(epoch from now()), etag = to_hex(mtime)||to_hex(id) WHERE id = NEW.parent_id;
+        ELSIF NEW.size != OLD.size THEN
+            v_size_diff := NEW.size - OLD.size;
+            UPDATE cloudlyst.files SET size = size + v_size_diff, mtime = extract(epoch from now()), etag = to_hex(mtime)||to_hex(id) WHERE id = NEW.parent_id;
+        END IF;
+    ELSE
+        UPDATE cloudlyst.files SET size = size + NEW.size, mtime = extract(epoch from now()), etag = to_hex(mtime)||to_hex(id) WHERE id = NEW.parent_id;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER cloudlyst_files_mtime_update
+    AFTER INSERT OR UPDATE ON cloudlyst.files
+    FOR EACH ROW
+    EXECUTE PROCEDURE cloudlyst_files_update_parent_etag();
+
+CREATE OR REPLACE FUNCTION cloudlyst_files_update_parent_etag_on_delete() RETURNS trigger AS $$
+BEGIN
+    UPDATE cloudlyst.files SET size = size - OLD.size, mtime = extract(epoch from now()), etag = to_hex(mtime)||to_hex(id) WHERE id = OLD.parent_id;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER cloudlyst_files_mtime_update_on_delete
+    AFTER DELETE ON cloudlyst.files
+    FOR EACH ROW
+    EXECUTE PROCEDURE cloudlyst_files_update_parent_etag_on_delete();
+
 CREATE OR REPLACE FUNCTION cloudlyst_put(v_path varchar, v_name varchar, v_parent_path varchar, v_mtime integer, v_storage_mtime integer, v_mimetype varchar, v_size bigint, v_etag varchar, v_owner_id integer) RETURNS bigint AS $$
 DECLARE
     v_parent_id bigint;
@@ -36,9 +74,7 @@ BEGIN
         (v_path, v_name, v_mtime, v_storage_mtime, v_mimetype_id, v_size, v_etag, v_owner_id, v_parent_id) 
     ON CONFLICT ON CONSTRAINT files_path_owner_id_key DO UPDATE SET mtime = v_mtime, storage_mtime = v_storage_mtime, mimetype_id = v_mimetype_id, size = v_size, etag = v_etag
     RETURNING id INTO v_file_id;
-    
-    PERFORM cloudlyst_update_parent_etag(v_parent_id, v_mtime);
-    
+        
     RETURN v_file_id;
 END;
 $$ LANGUAGE plpgsql;
@@ -65,8 +101,6 @@ BEGIN
         (SELECT v_dest_path, v_dest_name, mtime, storage_mtime, mimetype_id, size, etag, v_owner_id, v_parent_id FROM cloudlyst.files WHERE path = v_path) 
         RETURNING id INTO v_file_id;
     
-    PERFORM cloudlyst_update_parent_etag(v_parent_id, extract(epoch from now()));
-    
     RETURN v_file_id;
 END;
 $$ LANGUAGE plpgsql;
@@ -78,11 +112,7 @@ BEGIN
     UPDATE cloudlyst.files SET path = v_dest_path, name = v_dest_name WHERE path = v_path AND owner_id = v_owner_id
         RETURNING parent_id INTO v_parent_id;
     
-    PERFORM cloudlyst_update_parent_etag(v_parent_id, extract(epoch from now())::integer);
-    
     UPDATE cloudlyst.files SET path = overlay(path placing v_dest_path||'/' from 1 for length(v_path) + 1) WHERE path LIKE v_path||'/%' AND owner_id = v_owner_id
         RETURNING parent_id INTO v_parent_id;
-    
-    PERFORM cloudlyst_update_parent_etag(v_parent_id, extract(epoch from now())::integer);
 END;
 $$ LANGUAGE plpgsql;
