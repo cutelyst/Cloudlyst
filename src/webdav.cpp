@@ -23,11 +23,17 @@
 
 #include <QLoggingCategory>
 
+Q_LOGGING_CATEGORY(WEBDAV_BASE, "webdav.BASE")
 Q_LOGGING_CATEGORY(WEBDAV_PUT, "webdav.PUT")
+Q_LOGGING_CATEGORY(WEBDAV_HEAD, "webdav.HEAD")
 Q_LOGGING_CATEGORY(WEBDAV_GET, "webdav.GET")
 Q_LOGGING_CATEGORY(WEBDAV_MKCOL, "webdav.MKCOL")
+Q_LOGGING_CATEGORY(WEBDAV_COPY, "webdav.COPY")
+Q_LOGGING_CATEGORY(WEBDAV_MOVE, "webdav.MOVE")
+Q_LOGGING_CATEGORY(WEBDAV_DELETE, "webdav.DELETE")
 Q_LOGGING_CATEGORY(WEBDAV_PROPFIND, "webdav.PROPFIND")
 Q_LOGGING_CATEGORY(WEBDAV_PROPPATCH, "webdav.PROPPATCH")
+Q_LOGGING_CATEGORY(WEBDAV_SQL, "webdav.SQL")
 
 using namespace Cutelyst;
 
@@ -55,7 +61,7 @@ bool Webdav::dav(Context *c, const QStringList &pathParts)
 
 void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
 {
-    qDebug() << Q_FUNC_INFO << pathParts;
+    qCDebug(WEBDAV_HEAD) << pathParts;
     Response *res = c->response();
 
     const QString path = pathFiles(pathParts);
@@ -69,7 +75,7 @@ void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
         headers.setContentLength(fileItem.size);
         headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + fileItem.etag + QLatin1Char('"'));
     } else {
-        qDebug() << error;
+        qCWarning(WEBDAV_HEAD) << "error" << error;
         res->setStatus(Response::NotFound);
         res->setBody(QByteArrayLiteral("Content not found."));
     }
@@ -98,7 +104,7 @@ void Webdav::dav_GET(Context *c, const QStringList &pathParts)
         // TODO also use X-SENDFILE
         res->setBody(file);
     } else {
-        QFileInfo info(resource);
+        const QFileInfo info(resource);
         if (fileItem.id && info.isDir()) {
             res->setStatus(Response::MethodNotAllowed);
             res->setBody(QByteArrayLiteral("This is the WebDAV interface. It can only be accessed by WebDAV clients."));
@@ -123,7 +129,7 @@ void Webdav::dav_DELETE(Context *c, const QStringList &pathParts)
 {
     const QString path = pathFiles(pathParts);
     const QString resource = resourcePath(c, pathParts);
-    qDebug() << Q_FUNC_INFO << path << resource;
+    qCDebug(WEBDAV_DELETE) << path << resource;
 
     Response *res = c->response();
     QFileInfo info(resource);
@@ -132,14 +138,14 @@ void Webdav::dav_DELETE(Context *c, const QStringList &pathParts)
             res->setStatus(Response::NoContent);
             QString error;
             if (sqlFilesDelete(path, Authentication::user(c).id(), error) < 0) {
-                qDebug() << "DELETE sql error" << error;
+                qCWarning(WEBDAV_DELETE) << "sql error" << error;
             }
         }
     } else {
         QString error;
         int ret = sqlFilesDelete(path, Authentication::user(c).id(), error);
         if (ret < 0) {
-            qDebug() << "DELETE sql error" << error;
+            qCWarning(WEBDAV_DELETE) << "sql error" << error;
         } else if (ret == 0) {
             res->setStatus(Response::NotFound);
         } else {
@@ -165,9 +171,9 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
     const QString destPath = pathFiles(destPathParts);
     const QString destResource = resourcePath(c, destPathParts);
 
-    qDebug() << "COPY HEADER" << req->header(QStringLiteral("DESTINATION")) << "DESTINATION PATH" << destination.path(QUrl::FullyEncoded);
-    qDebug() << "COPY" << c->request()->match() << rawDestPath << destPathParts;
-    qDebug() << "COPY" << path << "TO" << destPath;
+    qCDebug(WEBDAV_COPY) << "COPY HEADER" << req->header(QStringLiteral("DESTINATION")) << "DESTINATION PATH" << destination.path(QUrl::FullyEncoded);
+    qCDebug(WEBDAV_COPY) << "COPY" << c->request()->match() << rawDestPath << destPathParts;
+    qCDebug(WEBDAV_COPY) << "COPY" << path << "TO" << destPath;
 
     Response *res = c->response();
     if (path == destPath) {
@@ -180,20 +186,20 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
         res->setStatus(Response::NotFound);
         return;
     }
-    qDebug() << "COPY" << origInfo.absoluteFilePath() << origInfo.isDir() << origInfo.isFile();
+    qCDebug(WEBDAV_COPY) << "COPY" << origInfo.absoluteFilePath() << origInfo.isDir() << origInfo.isFile();
 
     const QFileInfo destInfo(destResource);
     const bool overwrite = destInfo.exists();
     if (overwrite) {
         if (req->header(QStringLiteral("OVERWRITE")) == QLatin1String("F")) {
-            qDebug() << "COPY: destination exists but overwrite is disallowed" << path << destPath << destination.path();
+            qCDebug(WEBDAV_COPY) << "COPY: destination exists but overwrite is disallowed" << path << destPath << destination.path();
             res->setStatus(Response::PreconditionFailed);
             return;
         }
 
-        qWarning() << "REMOVING destination" << destInfo.absoluteFilePath();
+        qCDebug(WEBDAV_COPY) << "REMOVING destination" << destInfo.absoluteFilePath();
         if (!removeDestination(destInfo, res)) {
-            qWarning() << "Could NOT remove destination" << destInfo.absolutePath();
+            qCWarning(WEBDAV_COPY) << "Could NOT remove destination" << destInfo.absolutePath();
             res->setStatus(Response::PreconditionFailed);
             return;
         }
@@ -201,7 +207,7 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
         QString error;
         int ret = sqlFilesDelete(destPath, Authentication::user(c).id(), error);
         if (ret < 0) {
-            qDebug() << "DELETE sql error" << error;
+            qCDebug(WEBDAV_COPY) << "DELETE sql error" << error;
             res->setStatus(Response::InternalServerError);
             return;
         }
@@ -219,7 +225,7 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
             if (sqlFilesCopy(path, destPathParts, Authentication::user(c).id(), error)) {
                 res->setStatus(overwrite ? Response::NoContent : Response::Created);
             } else {
-                qWarning() << "Failed to create SQL entry on COPY" << error;
+                qCWarning(WEBDAV_COPY) << "Failed to create SQL entry on COPY" << error;
                 res->setBody(error);
                 res->setStatus(Response::InternalServerError);
                 QFile::remove(destInfo.absoluteFilePath());
@@ -227,28 +233,28 @@ void Webdav::dav_COPY(Context *c, const QStringList &pathParts)
         } else {
             const QFileInfo destInfoPath(destInfo.absolutePath());
             if (!destInfoPath.exists() || !destInfoPath.isDir()) {
-                qWarning() << "Destination directory does not exists or is not a directory";
+                qCWarning(WEBDAV_COPY) << "Destination directory does not exists or is not a directory";
                 res->setStatus(Response::Conflict);
             } else {
-                qWarning() << "Failed to COPY file" << path << "to" << destInfo.absoluteFilePath() << orig.errorString();
-                qWarning() << "Failed list" << destination << QDir(destInfo.absolutePath()).entryList();
+                qCWarning(WEBDAV_COPY) << "Failed to COPY file" << path << "to" << destInfo.absoluteFilePath() << orig.errorString();
+                qCWarning(WEBDAV_COPY) << "Failed list" << destination << QDir(destInfo.absolutePath()).entryList();
                 res->setStatus(Response::InternalServerError);
             }
         }
     } else {
         const QString origPath = origInfo.absoluteFilePath();
         const QString destAbsPath = destInfo.absoluteFilePath();
-        qDebug() << "COPY DIR" << origPath << destAbsPath;
+        qCDebug(WEBDAV_COPY) << "COPY DIR" << origPath << destAbsPath;
         QDir dir;
         if (!dir.mkpath(destAbsPath)) {
-            qWarning() << "Could not create destination";
+            qCWarning(WEBDAV_COPY) << "Could not create destination";
             res->setStatus(Response::InternalServerError);
             return;
         }
 
         QString error;
         if (!sqlFilesCopy(path, destPathParts, Authentication::user(c).id(), error)) {
-            qWarning() << "Failed to create SQL entry on COPY" << error;
+            qCWarning(WEBDAV_COPY) << "Failed to create SQL entry on COPY" << error;
             res->setBody(error);
             res->setStatus(Response::InternalServerError);
             dir.rmdir(destAbsPath);
@@ -295,9 +301,9 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     const QString destPath = pathFiles(destPathParts);
     const QString destResource = resourcePath(c, destPathParts);
 
-    qDebug() << "MOVE" << resource << destResource;
+    qCDebug(WEBDAV_MOVE) << "MOVE" << resource << destResource;
     const QDir base = baseDir(c);
-    qDebug() << "MOVE relative" << base.relativeFilePath(resource) << base.relativeFilePath(destResource);
+    qCDebug(WEBDAV_MOVE) << "MOVE relative" << base.relativeFilePath(resource) << base.relativeFilePath(destResource);
 
     Response *res = c->response();
 
@@ -305,13 +311,13 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
     bool overwrite = destInfo.exists();
     if (overwrite) {
         if (req->header(QStringLiteral("OVERWRITE")) == QLatin1String("F")) {
-            qDebug() << "MOVE: destination exists but overwrite is disallowed" << path << destResource;
+            qCDebug(WEBDAV_MOVE) << "MOVE: destination exists but overwrite is disallowed" << path << destResource;
             res->setStatus(Response::PreconditionFailed);
             return;
         }
 
         if (!removeDestination(destInfo, res)) {
-            qDebug() << "Destination exists and could not be removed";
+            qCWarning(WEBDAV_MOVE) << "Destination exists and could not be removed";
             res->setStatus(Response::InternalServerError);
             return;
         }
@@ -319,14 +325,14 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
         QString error;
         int ret = sqlFilesDelete(destPath, userId, error);
         if (ret < 0) {
-            qDebug() << "DELETE sql error" << error;
+            qCWarning(WEBDAV_MOVE) << "DELETE sql error" << error;
             res->setStatus(Response::InternalServerError);
             return;
         }
     }
 
     QFileInfo srcInfo(resource);
-    qDebug() << "MOVE info" << resource << srcInfo.isFile() << srcInfo.isDir();
+    qCDebug(WEBDAV_MOVE) << "MOVE info" << resource << srcInfo.isFile() << srcInfo.isDir();
 
     if (srcInfo.isFile()) {
         QFile file(resource);
@@ -334,14 +340,14 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
             QString error;
             int ret = sqlFilesMove(base.relativeFilePath(resource), base.relativeFilePath(destResource), destination.fileName(QUrl::FullyDecoded), userId, error);
             if (ret < 0) {
-                qDebug() << "MOVE sql error" << error;
+                qCWarning(WEBDAV_MOVE) << "MOVE sql error" << error;
                 res->setStatus(Response::InternalServerError);
                 QFile::rename(destResource, resource);
                 return;
             }
             res->setStatus(overwrite ? Response::NoContent : Response::Created);
         } else {
-            qDebug() << "MOVE failed" << file.errorString();
+            qCWarning(WEBDAV_MOVE) << "MOVE failed" << file.errorString();
             res->setStatus(Response::InternalServerError);
             res->setBody(file.errorString());
         }
@@ -352,7 +358,7 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
             QString error;
             int ret = sqlFilesMove(base.relativeFilePath(resource), base.relativeFilePath(destResource), destination.fileName(QUrl::FullyDecoded), userId, error);
             if (ret < 0) {
-                qDebug() << "MOVE sql error" << error;
+                qCWarning(WEBDAV_MOVE) << "MOVE sql error" << error;
                 res->setStatus(Response::InternalServerError);
                 QFile::rename(destResource, resource);
                 return;
@@ -360,14 +366,14 @@ void Webdav::dav_MOVE(Context *c, const QStringList &pathParts)
 
             res->setStatus(overwrite ? Response::NoContent : Response::Created);
         } else {
-            qDebug() << "MOVE dir failed";
+            qCWarning(WEBDAV_MOVE) << "MOVE dir failed";
             res->setStatus(Response::InternalServerError);
         }
     } else if (!srcInfo.exists()) {
         QString error;
         int ret = sqlFilesDelete(path, userId, error);
         if (ret < 0) {
-            qDebug() << "MOVE sql error" << error;
+            qCWarning(WEBDAV_MOVE) << "MOVE sql error" << error;
             res->setStatus(Response::InternalServerError);
             return;
         } else {
@@ -486,12 +492,12 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
         c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + etag + QLatin1Char('"'));
         c->response()->setStatus(exists ? Response::OK : Response::Created);
     } else {
+        qCWarning(WEBDAV_PUT) << "put error" << error;
         c->response()->setStatus(Response::InternalServerError);
         c->response()->setBody(error);
         if (!exists) {
             file.remove();
         }
-        qDebug() << "put error" << error;
     }
 }
 
@@ -511,7 +517,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
     qCDebug(WEBDAV_PROPFIND) << "depth" << depth << req->header(QStringLiteral("DEPTH"));
     GetProperties props;
-    if (req->body() && req->body()->size() && !parseProps(c, path, props)) {
+    if (req->body() && req->body()->size() && !parsePropFindRequest(c, props)) {
         return;
     }
 
@@ -539,21 +545,21 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
             stream.writeStartElement(QStringLiteral("d:multistatus"));
 
-            profindRequest(file, stream, baseUri, props, userId);
+            writePropFindResponseItem(file, stream, baseUri, props);
 
             const QString mime = file.mimetype;
             bool isDir = mime == QLatin1String("httpd/unix-directory");
 
-            qDebug() << Q_FUNC_INFO << "DIR" << isDir << "DEPTH" << depth;
-            qDebug() << Q_FUNC_INFO << "BASE" << req->match() << req->path();
+            qCDebug(WEBDAV_PROPFIND) << "DIR" << isDir << "DEPTH" << depth;
+            qCDebug(WEBDAV_PROPFIND) << "BASE" << req->match() << req->path();
             if (depth == 1 && isDir) {
                 qint64 parentId = file.id;
-                qDebug() << Q_FUNC_INFO << "DIR" << parentId;
+                qCDebug(WEBDAV_PROPFIND) << "DIR" << parentId;
 
                 std::vector<FileItem> files = sqlFilesItems(parentId, error);
 
                 for (const FileItem &file : files) {
-                    profindRequest(file, stream, baseUri, props, userId);
+                    writePropFindResponseItem(file, stream, baseUri, props);
                 }
             }
 
@@ -606,21 +612,21 @@ bool Webdav::preFork(Application *app)
         m_baseDir.append(QLatin1Char('/'));
     }
     QDir().mkpath(m_baseDir);
-    qDebug() << "BASE" << m_baseDir;
+    qCDebug(WEBDAV_BASE) << "BASE" << m_baseDir;
     m_storageInfo.setPath(m_baseDir);
 
     m_autoFormatting = app->config(QStringLiteral("XmlAutoFormatting"), false).toBool();
 }
 
-void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props)
+void Webdav::parsePropFindPropElement(QXmlStreamReader &xml, GetProperties &props)
 {
     while (!xml.atEnd()) {
         auto token = xml.readNext();
-        qWarning() << "PROPS token 3" <<  xml.tokenString();
+//        qCDebug(WEBDAV_PROPFIND) << "PROPS token 3" <<  xml.tokenString();
         if (token == QXmlStreamReader::StartElement) {
             const QString name = xml.name().toString();
             const QString ns = xml.namespaceUri().toString();
-            qDebug() << "GET PROP" << WebdavPropertyStorage::propertyKey(name, ns);
+            qCDebug(WEBDAV_PROPFIND) << "GET PROP" << WebdavPropertyStorage::propertyKey(name, ns);
             props.push_back({ name, ns });
             xml.skipCurrentElement();
         } else if (token == QXmlStreamReader::EndElement) {
@@ -629,16 +635,16 @@ void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, GetPrope
     }
 }
 
-void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetProperties &props)
+void Webdav::parsePropFindElement(QXmlStreamReader &xml, GetProperties &props)
 {
     while (!xml.atEnd()) {
         auto token = xml.readNext();
-        qWarning() << "PROPS token 2" <<  xml.tokenString();
+//        qCDebug(WEBDAV_PROPFIND) << "PROPS token 2" <<  xml.tokenString();
         if (token == QXmlStreamReader::StartElement) {
             if (xml.name() == QLatin1String("prop")) {
-                parsePropsProp(xml, path, props);
+                parsePropFindPropElement(xml, props);
             } else if (xml.name() == QLatin1String("allprop")) {
-                qDebug() << "GET ALLPROP";
+                qCDebug(WEBDAV_PROPFIND) << "GET ALLPROP";
                 const QString davNS = QStringLiteral("DAV:");
                 props.append({
                                  {QStringLiteral("quota-used-bytes"), davNS},
@@ -650,7 +656,7 @@ void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetP
                                  {QStringLiteral("resourcetype"), davNS},
                              });
             } else if (xml.name() == QLatin1String("propname")) {
-                qDebug() << "GET PROPNAME";
+                qCDebug(WEBDAV_PROPFIND) << "GET PROPNAME";
             }
         } else if (token == QXmlStreamReader::EndElement) {
             return;
@@ -658,25 +664,25 @@ void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetP
     }
 }
 
-bool Webdav::parseProps(Context *c, const QString &path, GetProperties &props)
+bool Webdav::parsePropFindRequest(Context *c, GetProperties &props)
 {
     Response *res = c->response();
 
     const QByteArray data = c->request()->body()->readAll();
-    qWarning() << "PROPS data" << data;
+    qCDebug(WEBDAV_PROPFIND) << "PROPS data" << data;
 //    qDebug() << "PROPS current" << m_pathProps[path];
 
     QXmlStreamReader xml(data);
     while (!xml.atEnd()) {
         auto token = xml.readNext();
-        qWarning() << "PROPS token 1" <<  xml.tokenString() << xml.name();
+//        qCDebug(WEBDAV_PROPFIND) << "PROPS token 1" <<  xml.tokenString() << xml.name();
         if (token == QXmlStreamReader::StartElement && xml.name() == QLatin1String("propfind")) {
-            parsePropsPropFind(xml, path, props);
+            parsePropFindElement(xml, props);
         }
     }
 
     if (xml.hasError()) {
-        qWarning() << "PROPS parse error" << xml.errorString();
+        qCWarning(WEBDAV_PROPFIND) << "PROPS parse error" << xml.errorString();
 
         res->setStatus(Response::BadRequest);
 
@@ -703,15 +709,15 @@ bool Webdav::parsePropPatchValue(QXmlStreamReader &xml, qint64 path, bool set)
     int depth = 0;
     while (!xml.atEnd()) {
         QXmlStreamReader::TokenType type = xml.readNext();
-        qWarning() << "PROPS token 4" << type <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
+        qCDebug(WEBDAV_PROPPATCH) << "PROPS token 4" << type <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
         if (type == QXmlStreamReader::StartElement) {
             const QString name = xml.name().toString();
             if (set) {
                 const QString value = xml.readElementText(QXmlStreamReader::QXmlStreamReader::SkipChildElements);
-                qDebug() << "NEW PROP" << name << value << xml.tokenString();
+                qCDebug(WEBDAV_PROPPATCH) << "NEW PROP" << name << value << xml.tokenString();
                 m_propStorage->setValue(path, WebdavPropertyStorage::propertyKey(xml.name(), xml.namespaceUri()), value);
             } else {
-                qDebug() << "DELETE PROP ";
+                qCDebug(WEBDAV_PROPPATCH) << "DELETE PROP ";
                 m_propStorage->remove(path, WebdavPropertyStorage::propertyKey(xml.name(), xml.namespaceUri()));
                 xml.skipCurrentElement();
             }
@@ -729,10 +735,10 @@ bool Webdav::parsePropPatchProperty(QXmlStreamReader &xml, qint64 path, bool set
 {
     while (!xml.atEnd()) {
         QXmlStreamReader::TokenType type = xml.readNext();
-        qWarning() << "PROPS token 3" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
+//        qCDebug(WEBDAV_PROPPATCH) << "PROPS token 3" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
         if (type == QXmlStreamReader::StartElement) {
             if (xml.name() == QLatin1String("prop")) {
-                qWarning() << "PROPS prop" ;
+//                qCDebug(WEBDAV_PROPPATCH) << "PROPS prop" ;
                 if (!parsePropPatchValue(xml, path, set)) {
                     return false;
                 }
@@ -750,13 +756,13 @@ void Webdav::parsePropPatchUpdate(QXmlStreamReader &xml, qint64 path)
 {
     while (!xml.atEnd()) {
         QXmlStreamReader::TokenType type = xml.readNext();
-        qWarning() << "PROPS token 2" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
+//        qCDebug(WEBDAV_PROPPATCH) << "PROPS token 2" << xml.tokenType() <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
         if (type == QXmlStreamReader::StartElement) {
             if (xml.name() == QLatin1String("set")) {
-                qWarning() << "PROPS set" ;
+                qCDebug(WEBDAV_PROPPATCH) << "PROPS set" ;
                 parsePropPatchProperty(xml, path, true);
             } else if (xml.name() == QLatin1String("remove")) {
-                qWarning() << "PROPS remove";
+                qCDebug(WEBDAV_PROPPATCH) << "PROPS remove";
                 parsePropPatchProperty(xml, path, false);
             }
         } else if (type == QXmlStreamReader::EndElement) {
@@ -770,7 +776,7 @@ bool Webdav::parsePropPatch(Context *c, qint64 path)
     Response *res = c->response();
 
     const QByteArray data = c->request()->body()->readAll();
-    qWarning() << "PROP PATCH data" << data;
+    qCDebug(WEBDAV_PROPPATCH) << "PROP PATCH data" << data;
 
     m_propStorage->begin();
 
@@ -778,17 +784,17 @@ bool Webdav::parsePropPatch(Context *c, qint64 path)
     while (!xml.atEnd()) {
         QXmlStreamReader::TokenType type = xml.readNext();
 
-        qWarning() << "PROPS token 1" << type <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
+//        qCDebug(WEBDAV_PROPPATCH) << "PROPS token 1" << type <<  xml.tokenString() << xml.name() << xml.text() << xml.namespaceUri();
         if (type == QXmlStreamReader::StartElement && xml.name() == QLatin1String("propertyupdate")) {
             parsePropPatchUpdate(xml, path);
-            qWarning() << "parsePropPatchUpdate finished" << xml.tokenType() << xml.tokenString() << xml.atEnd() << xml.hasError() << xml.errorString();
+            qCDebug(WEBDAV_PROPPATCH) << "parsePropPatchUpdate finished" << xml.tokenType() << xml.tokenString() << xml.atEnd() << xml.hasError() << xml.errorString();
 //            QXmlStreamReader::TokenType type = xml.readNext();
 //            qWarning() << "parsePropPatchUpdate finished2" << type << xml.tokenType() << xml.tokenString() << xml.atEnd() << xml.hasError() << xml.errorString();
         }
     }
 
     if (xml.hasError()) {
-        qWarning() << "PROPS parse error" << xml.errorString();
+        qCWarning(WEBDAV_PROPPATCH) << "PROPS parse error" << xml.errorString();
         m_propStorage->rollback();
 
         res->setStatus(Response::BadRequest);
@@ -812,7 +818,7 @@ bool Webdav::parsePropPatch(Context *c, qint64 path)
     return true;
 }
 
-void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props, const QVariant &ownerId)
+void Webdav::writePropFindResponseItem(const FileItem &file, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props)
 {
     const QString path = file.path;
 
@@ -829,7 +835,7 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
 
 //        qDebug() << "FIND" << properties;
     for (const Property &pData : props) {
-        qDebug() << "FIND data" << pData.name << pData.ns;
+//        qCDebug(WEBDAV_PROPFIND) << "FIND data" << pData.ns << pData.name;
         if (pData.ns == QLatin1String("DAV:")) {
             if (pData.name == QLatin1String("quota-used-bytes")) {
                 if (mime == QLatin1String("httpd/unix-directory")) {
@@ -919,7 +925,7 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
                 }
             }
         } else {
-            qWarning() << "FAILED to exec" << query.lastError().databaseText();
+            qCWarning(WEBDAV_PROPFIND) << "FAILED to exec" << query.lastError().databaseText();
         }
     }
 
@@ -932,12 +938,12 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
     if (!propsNotFound.empty()) {
         stream.writeStartElement(QStringLiteral("d:propstat"));
         stream.writeStartElement(QStringLiteral("d:prop"));
+
         for (const Property &prop : propsNotFound) {
-
+            qCDebug(WEBDAV_PROPFIND) << "WRITE 404" << prop.ns << prop.name;
             stream.writeEmptyElement(prop.ns, prop.name);
-            qDebug() << "WRITE 404" << prop.name << prop.ns;
-
         }
+
         stream.writeEndElement(); // prop
         stream.writeTextElement(QStringLiteral("d:status"), QStringLiteral("HTTP/1.1 404 Not Found"));
         stream.writeEndElement(); // propstat
@@ -958,7 +964,6 @@ bool Webdav::removeDestination(const QFileInfo &info, Response *res)
         }
     } else if (info.isDir()) {
         QDir dir(info.absoluteFilePath());
-        qDebug() << "REMOVE destination DIR" << dir;
         if (dir.removeRecursively()) {
             return true;
         } else {
@@ -973,7 +978,7 @@ bool Webdav::sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info,
 {
     const QString path = pathFiles(pathParts);
     const QString parentPath = pathFiles(pathParts.mid(0, pathParts.size() - 1));
-    qDebug() << "SQL UPSERT" << path << parentPath << etag << userId;
+    qCDebug(WEBDAV_SQL) << "SQL UPSERT" << path << parentPath << etag << userId;
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
                 QStringLiteral("SELECT cloudlyst_put"
                                "(:path, :name, :parent_path, :mtime, :storage_mtime, :mimetype, :size, :etag, :owner_id)"),
@@ -1015,7 +1020,7 @@ bool Webdav::sqlFilesCopy(const QString &path, const QStringList &destPathParts,
     const QString destPath = pathFiles(destPathParts);
     const QString destParentPath = pathFiles(destPathParts.mid(0, destPathParts.size() - 1));
     const QString destName = destPathParts.last();
-    qDebug() << "SQL COPY" << path << "TO" << destParentPath << destPath << destName << userId;
+    qCDebug(WEBDAV_SQL) << "SQL COPY" << path << "TO" << destParentPath << destPath << destName << userId;
     QSqlQuery query = CPreparedSqlQueryThreadForDB(
                 QStringLiteral("SELECT cloudlyst_copy"
                                "(:path, :dest_parent_path, :dest_path, :dest_name, :owner_id)"),

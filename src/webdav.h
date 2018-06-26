@@ -85,15 +85,15 @@ private:
 //    C_ATTR(End, :Private)
 //    void End(Context *c) { Q_UNUSED(c); }
 
-    void parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props);
-    void parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetProperties &props);
-    bool parseProps(Context *c, const QString &path, GetProperties &props);
+    void parsePropFindPropElement(QXmlStreamReader &xml, GetProperties &props);
+    void parsePropFindElement(QXmlStreamReader &xml, GetProperties &props);
+    bool parsePropFindRequest(Context *c, GetProperties &props);
 
     bool parsePropPatchValue(QXmlStreamReader &xml, qint64 path, bool set);
     bool parsePropPatchProperty(QXmlStreamReader &xml, qint64 path, bool set);
     void parsePropPatchUpdate(QXmlStreamReader &xml, qint64 path);
     bool parsePropPatch(Context *c, qint64 path);
-    void profindRequest(const FileItem &file, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props, const QVariant &ownerId);
+    void writePropFindResponseItem(const FileItem &file, QXmlStreamWriter &stream, const QString &baseUri, const GetProperties &props);
     bool removeDestination(const QFileInfo &info, Response *res);
 
     bool sqlFilesUpsert(const QStringList &pathParts, const QFileInfo &info, qint64 mTime, const QString &etag, const QVariant &userId, QString &error);
