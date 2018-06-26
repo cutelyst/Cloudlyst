@@ -25,11 +25,11 @@ AuthenticationUser AuthStoreSql::findUser(Context *c, const ParamsMultiMap &user
                                                            QStringLiteral("cloudlyst"));
 
     findUserQuery.bindValue(QStringLiteral(":username"), username);
-    qDebug() << findUserQuery.executedQuery() << username;
+//    qDebug() << findUserQuery.executedQuery() << username;
 
     if (findUserQuery.exec() && findUserQuery.next()) {
         const QVariant userId = findUserQuery.value(QStringLiteral("id"));
-        qDebug() << "FOUND USER -> " << userId;
+//        qDebug() << "FOUND USER -> " << userId;
         ret.setId(userId);
 
         int colunas = findUserQuery.record().count();
@@ -43,7 +43,7 @@ AuthenticationUser AuthStoreSql::findUser(Context *c, const ParamsMultiMap &user
             ret.insert(cols.at(j),
                         findUserQuery.value(j).toString());
         }
-        qDebug() << "user.roles" << ret;
+//        qDebug() << "user.roles" << ret;
 
 //        QSqlQuery findUserRolesQuery = CPreparedSqlQuery(
 //                    QStringLiteral("SELECT distinct(r.role) "
@@ -63,7 +63,7 @@ AuthenticationUser AuthStoreSql::findUser(Context *c, const ParamsMultiMap &user
 
         return ret;
     }
-    qDebug() << findUserQuery.lastError().text();
+//    qDebug() << findUserQuery.lastError().text();
 
     return ret;
 }

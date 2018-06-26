@@ -79,6 +79,8 @@ public:
     C_ATTR(dav_PROPPATCH, :Private)
     void dav_PROPPATCH(Context *c, const QStringList &pathParts);
 
+    virtual bool preFork(Application *app) override final;
+
 private:
 //    C_ATTR(End, :Private)
 //    void End(Context *c) { Q_UNUSED(c); }
@@ -109,6 +111,7 @@ private:
 
     QMimeDatabase m_db;
     QString m_baseDir;
+    bool m_autoFormatting = true;
     QStorageInfo m_storageInfo;
     WebdavPropertyStorage *m_propStorage;
 };

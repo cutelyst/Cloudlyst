@@ -5,6 +5,7 @@
 #include <Cutelyst/Plugins/Authentication/authentication.h>
 #include <Cutelyst/Plugins/Utils/Sql>
 #include <Cutelyst/utils.h>
+#include <Cutelyst/Application>
 
 #include <QSqlQuery>
 #include <QSqlError>
@@ -32,14 +33,6 @@ using namespace Cutelyst;
 
 Webdav::Webdav(QObject *parent) : Controller(parent)
 {
-    m_baseDir = QStandardPaths::writableLocation(QStandardPaths::DataLocation);
-    if (!m_baseDir.endsWith(QLatin1Char('/'))) {
-        m_baseDir.append(QLatin1Char('/'));
-    }
-    QDir().mkpath(m_baseDir);
-    qDebug() << "BASE" << m_baseDir;
-    m_storageInfo.setPath(m_baseDir);
-
     m_propStorage = new WebdavPgSqlPropertyStorage(this);
 }
 
@@ -425,7 +418,7 @@ void Webdav::dav_MKCOL(Context *c, const QStringList &pathParts)
             res->setStatus(Response::Conflict);
 
             QXmlStreamWriter stream(res);
-            stream.setAutoFormatting(true);
+            stream.setAutoFormatting(m_autoFormatting);
             stream.writeStartDocument();
             stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
             stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
@@ -539,7 +532,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
         if (file.id) {
 
-            stream.setAutoFormatting(true);
+            stream.setAutoFormatting(m_autoFormatting);
             stream.writeStartDocument();
             stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
             stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
@@ -573,7 +566,7 @@ void Webdav::dav_PROPFIND(Context *c, const QStringList &pathParts)
 
     res->setStatus(Response::NotFound);
 
-    stream.setAutoFormatting(true);
+    stream.setAutoFormatting(m_autoFormatting);
     stream.writeStartDocument();
     stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
     stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
@@ -606,6 +599,19 @@ void Webdav::dav_PROPPATCH(Context *c, const QStringList &pathParts)
     }
 }
 
+bool Webdav::preFork(Application *app)
+{
+    m_baseDir = app->config(QStringLiteral("DataDir"), QStandardPaths::writableLocation(QStandardPaths::DataLocation)).toString();
+    if (!m_baseDir.endsWith(QLatin1Char('/'))) {
+        m_baseDir.append(QLatin1Char('/'));
+    }
+    QDir().mkpath(m_baseDir);
+    qDebug() << "BASE" << m_baseDir;
+    m_storageInfo.setPath(m_baseDir);
+
+    m_autoFormatting = app->config(QStringLiteral("XmlAutoFormatting"), false).toBool();
+}
+
 void Webdav::parsePropsProp(QXmlStreamReader &xml, const QString &path, GetProperties &props)
 {
     while (!xml.atEnd()) {
@@ -633,6 +639,16 @@ void Webdav::parsePropsPropFind(QXmlStreamReader &xml, const QString &path, GetP
                 parsePropsProp(xml, path, props);
             } else if (xml.name() == QLatin1String("allprop")) {
                 qDebug() << "GET ALLPROP";
+                const QString davNS = QStringLiteral("DAV:");
+                props.append({
+                                 {QStringLiteral("quota-used-bytes"), davNS},
+                                 {QStringLiteral("quota-available-bytes"), davNS},
+                                 {QStringLiteral("getcontenttype"), davNS},
+                                 {QStringLiteral("getlastmodified"), davNS},
+                                 {QStringLiteral("getcontentlength"), davNS},
+                                 {QStringLiteral("getetag"), davNS},
+                                 {QStringLiteral("resourcetype"), davNS},
+                             });
             } else if (xml.name() == QLatin1String("propname")) {
                 qDebug() << "GET PROPNAME";
             }
@@ -665,7 +681,7 @@ bool Webdav::parseProps(Context *c, const QString &path, GetProperties &props)
         res->setStatus(Response::BadRequest);
 
         QXmlStreamWriter stream(res);
-        stream.setAutoFormatting(true);
+        stream.setAutoFormatting(m_autoFormatting);
         stream.writeStartDocument();
         stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
         stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
@@ -778,7 +794,7 @@ bool Webdav::parsePropPatch(Context *c, qint64 path)
         res->setStatus(Response::BadRequest);
 
         QXmlStreamWriter stream(res);
-        stream.setAutoFormatting(true);
+        stream.setAutoFormatting(m_autoFormatting);
         stream.writeStartDocument();
         stream.writeNamespace(QStringLiteral("DAV:"), QStringLiteral("d"));
         stream.writeNamespace(QStringLiteral("http://sabredav.org/ns"), QStringLiteral("s"));
@@ -814,7 +830,6 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
 //        qDebug() << "FIND" << properties;
     for (const Property &pData : props) {
         qDebug() << "FIND data" << pData.name << pData.ns;
-        bool found = false;
         if (pData.ns == QLatin1String("DAV:")) {
             if (pData.name == QLatin1String("quota-used-bytes")) {
                 if (mime == QLatin1String("httpd/unix-directory")) {
@@ -856,7 +871,7 @@ void Webdav::profindRequest(const FileItem &file, QXmlStreamWriter &stream, cons
             }
         } else if (pData.ns == QLatin1String("http://owncloud.org/ns")) {
             if (pData.name == QLatin1String("id")) {
-                stream.writeTextElement(pData.ns, QStringLiteral("id"), QStringLiteral("00123"));
+                stream.writeTextElement(pData.ns, QStringLiteral("id"), QString::number(file.id));
                 continue;
             } else if (pData.name == QLatin1String("downloadURL")) {
                 stream.writeEmptyElement(pData.ns, QStringLiteral("downloadURL"));
