@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QDirIterator>
+#include <QTemporaryFile>
 
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
@@ -23,17 +24,17 @@
 
 #include <QLoggingCategory>
 
-Q_LOGGING_CATEGORY(WEBDAV_BASE, "webdav.BASE")
-Q_LOGGING_CATEGORY(WEBDAV_PUT, "webdav.PUT")
-Q_LOGGING_CATEGORY(WEBDAV_HEAD, "webdav.HEAD")
-Q_LOGGING_CATEGORY(WEBDAV_GET, "webdav.GET")
-Q_LOGGING_CATEGORY(WEBDAV_MKCOL, "webdav.MKCOL")
-Q_LOGGING_CATEGORY(WEBDAV_COPY, "webdav.COPY")
-Q_LOGGING_CATEGORY(WEBDAV_MOVE, "webdav.MOVE")
-Q_LOGGING_CATEGORY(WEBDAV_DELETE, "webdav.DELETE")
-Q_LOGGING_CATEGORY(WEBDAV_PROPFIND, "webdav.PROPFIND")
-Q_LOGGING_CATEGORY(WEBDAV_PROPPATCH, "webdav.PROPPATCH")
-Q_LOGGING_CATEGORY(WEBDAV_SQL, "webdav.SQL")
+Q_LOGGING_CATEGORY(WEBDAV_BASE, "webdav.BASE", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_PUT, "webdav.PUT", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_HEAD, "webdav.HEAD", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_GET, "webdav.GET", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_MKCOL, "webdav.MKCOL", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_COPY, "webdav.COPY", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_MOVE, "webdav.MOVE", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_DELETE, "webdav.DELETE", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_PROPFIND, "webdav.PROPFIND", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_PROPPATCH, "webdav.PROPPATCH", QtWarningMsg)
+Q_LOGGING_CATEGORY(WEBDAV_SQL, "webdav.SQL", QtWarningMsg)
 
 using namespace Cutelyst;
 
@@ -455,28 +456,55 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
 
     QFile file(resource);
     bool exists = file.exists();
-    if (!file.open(QFile::WriteOnly | QFile::Truncate)) {
-        qCWarning(WEBDAV_PUT) << "Could not open file for writting" << file.errorString();
-        c->response()->setStatus(Response::BadRequest);
-        return;
-    }
+
+    QCryptographicHash hash(QCryptographicHash::Md5);
 
     QIODevice *uploadIO = req->body();
-    QCryptographicHash hash(QCryptographicHash::Md5);
-    char block[64 * 1024];
-    while (!uploadIO->atEnd()) {
-        qint64 in = uploadIO->read(block, sizeof(block));
-        if (in <= 0) {
-            break;
+    auto tmp = qobject_cast<QTemporaryFile *>(uploadIO);
+    if (tmp) {
+        if (exists) {
+            file.remove();
         }
 
-        if (file.write(block, in) != in) {
-            qCWarning(WEBDAV_PUT) << "Failed to write body";
-            break;
+        if (!tmp->rename(resource)) {
+            qCWarning(WEBDAV_PUT) << "Could not rename temporary file" << tmp->errorString() << tmp->fileName() << resource;
+            tmp = nullptr;
+        } else {
+            char block[64 * 1024];
+            while (!tmp->atEnd()) {
+                qint64 in = tmp->read(block, sizeof(block));
+                if (in <= 0) {
+                    break;
+                }
+
+                hash.addData(block, in);
+            }
+            tmp->setAutoRemove(false);
         }
-        hash.addData(block, in);
     }
-    file.close();
+
+    if (!tmp) {
+        if (!file.open(QFile::WriteOnly | QFile::Truncate)) {
+            qCWarning(WEBDAV_PUT) << "Could not open file for writting" << file.errorString();
+            c->response()->setStatus(Response::BadRequest);
+            return;
+        }
+
+        char block[64 * 1024];
+        while (!uploadIO->atEnd()) {
+            qint64 in = uploadIO->read(block, sizeof(block));
+            if (in <= 0) {
+                break;
+            }
+
+            if (file.write(block, in) != in) {
+                qCWarning(WEBDAV_PUT) << "Failed to write body";
+                break;
+            }
+            hash.addData(block, in);
+        }
+        file.close();
+    }
 
     const QString etag = QString::fromLatin1(hash.result().toHex());
 

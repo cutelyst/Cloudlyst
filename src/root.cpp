@@ -5,6 +5,8 @@
 
 #include <QLoggingCategory>
 
+Q_LOGGING_CATEGORY(WEBDAV_HACK, "webdav.HACK", QtWarningMsg)
+
 using namespace Cutelyst;
 
 Root::Root(QObject *parent) : Controller(parent)
@@ -46,12 +48,12 @@ void Root::remoteDavPhp(Context *c, const QStringList &pathParts)
         return;
     }
 
-    qDebug() << c->request()->match() << pathParts;
+    qCDebug(WEBDAV_HACK) << "MATCH" << c->request()->match() << pathParts;
     const QStringList argsWithoutUser = pathParts.mid(1);
     c->request()->setArguments(argsWithoutUser);
 
     const QString match = c->request()->match() + QLatin1Char('/') + pathParts.first();
-    qDebug() << "MATCH" << match;
+    qCDebug(WEBDAV_HACK) << "NEW MATCH" << match << argsWithoutUser;
 
     c->request()->setMatch(match);
 
