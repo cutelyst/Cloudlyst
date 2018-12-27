@@ -1,4 +1,7 @@
-project(Cloudlyst)
+project(Cloudlyst LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
 if (POLICY CMP0043)
@@ -13,7 +16,7 @@ if(WIN32)
 endif()
 
 find_package(Qt5 COMPONENTS Core Network Sql REQUIRED)
-find_package(Cutelyst2Qt5 2.5.0 REQUIRED)
+find_package(Cutelyst2Qt5 2.7.0 REQUIRED)
 
 # Auto generate moc files
 set(CMAKE_AUTOMOC ON)

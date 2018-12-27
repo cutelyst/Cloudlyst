@@ -6,6 +6,7 @@
 #include <Cutelyst/Plugins/Utils/Sql>
 #include <Cutelyst/utils.h>
 #include <Cutelyst/Application>
+#include <Cutelyst/Headers>
 
 #include <QSqlQuery>
 #include <QSqlError>
@@ -74,7 +75,7 @@ void Webdav::dav_HEAD(Context *c, const QStringList &pathParts)
         headers.setContentType(fileItem.mimetype);
         headers.setContentDispositionAttachment(fileItem.name);
         headers.setContentLength(fileItem.size);
-        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + fileItem.etag + QLatin1Char('"'));
+        headers.setETag(fileItem.etag);
     } else {
         qCWarning(WEBDAV_HEAD) << "error" << error;
         res->setStatus(Response::NotFound);
@@ -100,7 +101,7 @@ void Webdav::dav_GET(Context *c, const QStringList &pathParts)
         headers.setContentType(fileItem.mimetype);
         headers.setContentDispositionAttachment(fileItem.name);
         headers.setContentLength(fileItem.size);
-        headers.setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + fileItem.etag + QLatin1Char('"'));
+        headers.setETag(fileItem.etag);
 
         // TODO also use X-SENDFILE
         res->setBody(file);
@@ -404,7 +405,7 @@ void Webdav::dav_MKCOL(Context *c, const QStringList &pathParts)
             QFileInfo dirInfo(resource);
             const QByteArray hash = QCryptographicHash::hash(dirInfo.lastModified().toUTC().toString(Qt::ISODate).toLatin1(), QCryptographicHash::Md5);
             const QString etag = QString::fromLatin1(hash.toHex());
-            c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + etag + QLatin1Char('"'));
+            c->response()->headers().setETag(etag);
 
             const qint64 ocMTime = c->request()->header(QStringLiteral("X_OC_MTIME")).toLongLong();
 
@@ -517,7 +518,7 @@ void Webdav::dav_PUT(Context *c, const QStringList &pathParts)
         if (ocMTime) {
             c->response()->setHeader(QStringLiteral("X_OC_MTIME"), QStringLiteral("accepted"));
         }
-        c->response()->setHeader(QStringLiteral("ETAG"), QLatin1Char('"') + etag + QLatin1Char('"'));
+        c->response()->headers().setETag(etag);
         c->response()->setStatus(exists ? Response::OK : Response::Created);
     } else {
         qCWarning(WEBDAV_PUT) << "put error" << error;
@@ -644,6 +645,7 @@ bool Webdav::preFork(Application *app)
     m_storageInfo.setPath(m_baseDir);
 
     m_autoFormatting = app->config(QStringLiteral("XmlAutoFormatting"), false).toBool();
+    return true;
 }
 
 void Webdav::parsePropFindPropElement(QXmlStreamReader &xml, GetProperties &props)
@@ -1188,8 +1190,8 @@ QString Webdav::resourcePath(Context *c, const QStringList &pathParts) const
 QStringList Webdav::uriPathParts(const QString &path)
 {
     QStringList ret;
-    QVector<QStringRef> parts = path.splitRef(QLatin1Char('/'));
-    for (const QStringRef strRef : parts) {
+    const QVector<QStringRef> parts = path.splitRef(QLatin1Char('/'));
+    for (const QStringRef &strRef : parts) {
         QByteArray ba = strRef.toLatin1();
         ret.append(Utils::decodePercentEncoding(&ba));
     }
